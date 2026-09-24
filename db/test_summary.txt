@@ -1,0 +1,40 @@
+============================================================
+FocusMatch — Test Database Summary
+============================================================
+College     : Kalinga Institute of Industrial Technology (KIIT)
+City        : Bhubaneswar (BBSR)
+Generated   : 2026-09-24T15:30:51.000Z
+
+--- Counts ---
+Users            : 10
+Anon Profiles    : 10
+Matches (total)  : 31
+  Completed      : 29
+  Active         : 1
+  Queued         : 1
+Match Tasks      : 237
+Focus Sessions   : 258
+Match Results    : 58
+
+--- Users ---
+Roll         Anon Username             W    L    D  Streak
+-------------------------------------------------------
+22052001     CalmFalcon859             2    4    0       2
+22052002     SwiftWolf242              3    3    0       3
+22052003     ClearBear704              1    5    0       1
+22052004     SilentFalcon195           5    1    0       5
+22052005     SwiftMoose716             2    5    0       2
+22052006     ClearOtter833             4    2    0       4
+22052007     ClearBison325             2    2    0       2
+22052008     FrostFox928               1    3    0       1
+22052009     SteadyBison448            5    0    0       5
+22052010     MidnightOtter881          4    4    0       4
+
+--- Active Match ---
+  22052001 vs 22052002
+  Started : 2026-09-24T02:30:51.000Z
+  Ends    : 2026-09-25T02:30:51.000Z
+
+--- Score Formula ---
+  final_score = (0.5 × focus_min) + (30 × tasks_done) + (10 × sessions_done)
+============================================================

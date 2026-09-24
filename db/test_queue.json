@@ -1,0 +1,18 @@
+{
+  "description": "Simulated Redis matchmaking queue state",
+  "college": "Kalinga Institute of Industrial Technology (KIIT)",
+  "city": "Bhubaneswar (BBSR)",
+  "generated_at": "2026-09-24T15:30:51.000Z",
+  "queue": [
+    {
+      "userId": "a84372ca-7cb9-4932-95e1-416b8371b816",
+      "anonUsername": "ClearBear704",
+      "queuedAt": "2026-09-24T15:30:40.000Z"
+    },
+    {
+      "userId": "8a9d017c-1c24-4327-a953-0c0db08db00f",
+      "anonUsername": "SilentFalcon195",
+      "queuedAt": "2026-09-24T15:30:10.000Z"
+    }
+  ]
+}
