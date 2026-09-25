@@ -3,7 +3,7 @@
  *
  * Lets a developer rehearse WIN / LOSS / DRAW scorecards without waiting for a
  * natural result. It never changes the scoring formula: it only chooses the
- * simulated opponent's *stats* (focus minutes, tasks, sessions), and the
+ * simulated opponent's *stats* (focus minutes, sessions), and the
  * opponent's score is still computed by `calculateScore()`.
  *
  * In production builds (`import.meta.env.DEV === false`) every function here is
@@ -40,27 +40,38 @@ export const demoOutcome = {
    * Returns an opponent result that produces the requested outcome for this
    * user result, or null to use the natural opponent simulation.
    * WIN cannot be forced at 0 points (no valid opponent can score below 0).
+   * 
+   * v2 formula: score depends only on focus minutes and sessions — tasks are
+   * still stored on the result for display purposes but carry zero weight.
    */
   resolveOpponentResult(match: Match, userResult: MatchResult): MatchResult | null {
     const mode = demoOutcome.get();
     if (mode === 'natural') return null;
 
-    const { totalFocusMinutes: focus, tasksCompleted: tasks, sessionsCompleted: sessions } = userResult;
+    const {
+      totalFocusMinutes: focus,
+      tasksCompleted: tasks,
+      sessionsCompleted: sessions,
+    } = userResult;
+
+    // [focus, tasks, sessions] — tasks stored but not scored in v2
     let stats: [number, number, number];
     switch (mode) {
       case 'draw':
-        // Identical stats => identical score under the same formula.
+        // Identical focus + sessions => identical score under v2 formula.
         stats = [focus, tasks, sessions];
         break;
       case 'loss':
-        // One more completed task than the user => exactly +30 pts.
-        stats = [focus, tasks + 1, sessions];
+        // One extra session => exactly +15 pts more than the user.
+        stats = [focus, tasks, sessions + 1];
         break;
       case 'win':
         if (userResult.finalScore <= 0) return null;
-        // Half of each stat (rounded down) is strictly lower for any score > 0.
-        stats = [Math.floor(focus / 2), Math.floor(tasks / 2), Math.floor(sessions / 2)];
+        // Half of focus and sessions (rounded down) is strictly lower for any score > 0.
+        stats = [Math.floor(focus / 2), tasks, Math.floor(sessions / 2)];
         break;
+      default:
+        return null;
     }
 
     const [oppFocus, oppTasks, oppSessions] = stats;
@@ -71,7 +82,8 @@ export const demoOutcome = {
       totalFocusMinutes: oppFocus,
       tasksCompleted: oppTasks,
       sessionsCompleted: oppSessions,
-      finalScore: calculateScore(oppFocus, oppTasks, oppSessions),
+      // v2: calculateScore only uses focus minutes + sessions
+      finalScore: calculateScore(oppFocus, oppSessions),
     };
     // Same cache as the natural simulation, so refreshes / reopened scorecards stay identical.
     storage.set(`opp_result_${match.id}`, result);

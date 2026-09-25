@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { ProgressRing } from '../ui/ProgressRing';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
-import { Play, Pause, RotateCcw, CheckCircle } from 'lucide-react';
+import { Play, Pause, RotateCcw, CheckCircle, Lock, Clock } from 'lucide-react';
 import { PomodoroMode, MODE_MINUTES, getRemainingSeconds } from '../../utils/pomodoro';
 import { calculateScore } from '../../utils/scoring';
 
@@ -27,10 +27,19 @@ const MODES: { id: PomodoroMode; label: string; activeClass: string }[] = [
   },
 ];
 
+/** Formats a cooldown delta in seconds as "1:23" */
+const formatCooldown = (ms: number) => {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${sec.toString().padStart(2, '0')}`;
+};
+
 export const PomodoroTimer: React.FC = () => {
   const {
     pomodoroState,
     focusSessions,
+    sessionCooldownEndsAt,
     startPomodoro,
     pausePomodoro,
     resetPomodoro,
@@ -39,6 +48,7 @@ export const PomodoroTimer: React.FC = () => {
   } = useApp();
   const [now, setNow] = useState(() => Date.now());
   const [completionNotice, setCompletionNotice] = useState<string | null>(null);
+  const [cooldownSecsLeft, setCooldownSecsLeft] = useState<number>(0);
 
   // Display-only tick. Remaining time is always derived from timestamps, and
   // completion is detected centrally by the match lifecycle tick.
@@ -49,6 +59,23 @@ export const PomodoroTimer: React.FC = () => {
     return () => clearInterval(interval);
   }, [pomodoroState.isRunning, pomodoroState.startedAt]);
 
+  // Cooldown countdown tick — only runs while a cooldown is active.
+  useEffect(() => {
+    if (!sessionCooldownEndsAt) {
+      setCooldownSecsLeft(0);
+      return;
+    }
+    const update = () => {
+      const remaining = Math.max(0, sessionCooldownEndsAt - Date.now());
+      setCooldownSecsLeft(remaining);
+    };
+    update();
+    if (sessionCooldownEndsAt > Date.now()) {
+      const interval = setInterval(update, 500);
+      return () => clearInterval(interval);
+    }
+  }, [sessionCooldownEndsAt]);
+
   // Success feedback when a new focus session is logged.
   const lastSession = focusSessions.length ? focusSessions[focusSessions.length - 1] : null;
   const lastSessionId = lastSession?.id ?? null;
@@ -57,7 +84,7 @@ export const PomodoroTimer: React.FC = () => {
   useEffect(() => {
     if (!lastSessionId || lastSessionId === prevSessionId.current) return;
     prevSessionId.current = lastSessionId;
-    const pts = calculateScore(lastSessionMinutes, 0, 1);
+    const pts = calculateScore(lastSessionMinutes, 1);
     setCompletionNotice(`Session complete — ${lastSessionMinutes}m logged (+${pts} pts)`);
     const timeout = setTimeout(() => setCompletionNotice(null), 4000);
     return () => clearTimeout(timeout);
@@ -66,6 +93,7 @@ export const PomodoroTimer: React.FC = () => {
   const secondsLeft = getRemainingSeconds(pomodoroState, now);
   const isDemo = !!pomodoroState.demoMode;
   const isPaused = !pomodoroState.isRunning && pomodoroState.pausedSecondsLeft !== null;
+  const isCoolingDown = cooldownSecsLeft > 0;
 
   // Format MM:SS
   const formatTime = (secs: number) => {
@@ -136,6 +164,25 @@ export const PomodoroTimer: React.FC = () => {
         </ProgressRing>
       </div>
 
+      {/* Cooldown Banner — shown while anti-spam cooldown is active */}
+      {isCoolingDown && !pomodoroState.isRunning && (
+        <div
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1A2133] border border-[#FFB547]/30 text-[#FFB547] text-xs font-mono animate-fade-in"
+          role="status"
+          aria-live="polite"
+        >
+          <Lock className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+          <span>
+            Next session in{' '}
+            <span className="font-bold tabular-nums">
+              {formatCooldown(cooldownSecsLeft)}
+            </span>
+            {' '}— short break recommended
+          </span>
+          <Clock className="w-3.5 h-3.5 shrink-0 opacity-60" aria-hidden="true" />
+        </div>
+      )}
+
       {/* Control Buttons */}
       <div className="flex flex-wrap justify-center items-center gap-3">
         {pomodoroState.isRunning ? (
@@ -148,14 +195,30 @@ export const PomodoroTimer: React.FC = () => {
             Pause
           </Button>
         ) : (
-          <Button
-            variant={pomodoroState.mode === 'deep' ? 'primary' : 'teal'}
-            size="md"
-            onClick={startPomodoro}
-            icon={<Play className="w-4 h-4 fill-current" />}
-          >
-            {isPaused ? 'Resume' : pomodoroState.mode === 'break' ? 'Start Break' : 'Start Focus'}
-          </Button>
+          <div className="relative group">
+            <Button
+              variant={pomodoroState.mode === 'deep' ? 'primary' : 'teal'}
+              size="md"
+              onClick={startPomodoro}
+              disabled={isCoolingDown}
+              icon={isCoolingDown ? <Lock className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
+              className={isCoolingDown ? 'opacity-50 cursor-not-allowed' : ''}
+            >
+              {isCoolingDown
+                ? `Wait ${formatCooldown(cooldownSecsLeft)}`
+                : isPaused
+                ? 'Resume'
+                : pomodoroState.mode === 'break'
+                ? 'Start Break'
+                : 'Start Focus'}
+            </Button>
+            {/* Tooltip explaining the cooldown */}
+            {isCoolingDown && (
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 text-[10px] font-mono text-[#94A3B8] bg-[#1A2133] border border-[#2A3348] rounded-lg px-3 py-2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-10 text-center">
+                Anti-spam cooldown — prevents back-to-back session gaming
+              </div>
+            )}
+          </div>
         )}
 
         <Button
@@ -164,6 +227,7 @@ export const PomodoroTimer: React.FC = () => {
           onClick={resetPomodoro}
           icon={<RotateCcw className="w-4 h-4" />}
           title="Reset timer (an unfinished session is not counted)"
+          disabled={pomodoroState.isRunning}
         >
           Reset
         </Button>

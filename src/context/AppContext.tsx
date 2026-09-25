@@ -29,6 +29,7 @@ import {
 import {
   PomodoroMode,
   PomodoroPersistedState,
+  MODE_MINUTES,
   createPomodoroState,
   isPomodoroState,
   startPomodoro as startPomodoroRun,
@@ -305,6 +306,27 @@ interface AppContextType {
   selectPomodoroMode: (mode: PomodoroMode) => void;
   togglePomodoroDemoMode: () => void;
 
+  // Idle Detection (Netflix-style "Still Studying?" overlay)
+  idleWarningActive: boolean;
+  triggerIdleWarning: () => void;
+  dismissIdleWarning: (action: 'resume' | 'break') => void;
+
+  // Anti-spam: cooldown between sessions
+  /** Timestamp (ms) after which the next session can be started, or null if no cooldown. */
+  sessionCooldownEndsAt: number | null;
+
+  /**
+   * Called by MatchWorkspace to wire up the interaction counter.
+   * The ref's current value is read by AppContext when a session completes.
+   */
+  registerInteractionCounter: (getCount: () => number) => void;
+
+  // Dev-only demo actions (no-ops in production)
+  /** Force-completes the currently running Pomodoro session with a given interaction count. */
+  devCompleteSession: (interactionCount: number) => void;
+  /** Instantly clears the 90-second anti-spam cooldown so you can start the next session immediately. */
+  devSkipCooldown: () => void;
+
   // Lifecycle & Scorecard Actions
   finalizeCurrentMatch: () => void;
   fastForwardMatchExpiry: () => void;
@@ -339,6 +361,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isMatchmakingModalOpen, setIsMatchmakingModalOpen] = useState<boolean>(
     !!boot.data.matchmakingSession && boot.authStep === 'authenticated'
   );
+  const [idleWarningActive, setIdleWarningActive] = useState<boolean>(false);
+  // Cooldown end timestamp (null = no cooldown active). Not persisted — resets on refresh.
+  const [sessionCooldownEndsAt, setSessionCooldownEndsAt] = useState<number | null>(null);
+
+  // Written by MatchWorkspace via registerInteractionCounter so the tick can
+  // read the live interaction count when a session completes naturally.
+  const interactionCountRef = useRef<() => number>(() => 0);
 
   // Latest-state mirror for timers and guards (avoids stale closures and lets
   // actions reject a second call that arrives before React re-renders).
@@ -622,7 +651,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         stateRef.current = { ...s, pomodoroState: settled.next };
         setPomodoroState(settled.next);
         const session = settled.session;
-        if (session) setFocusSessions((prev) => addUniqueSession(prev, session));
+        if (session) {
+          // Stamp the session with how many browser interactions occurred.
+          // 0 interactions → flagged as "unverified" in the user's own stats.
+          const sessionWithCount = {
+            ...session,
+            interactionCount: interactionCountRef.current(),
+          };
+          setFocusSessions((prev) => addUniqueSession(prev, sessionWithCount));
+          // Session completed — arm the anti-spam cooldown.
+          setSessionCooldownEndsAt(Date.now() + 90 * 1000);
+        }
       }
     };
     tick();
@@ -720,7 +759,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const startPomodoro = () => {
-    if (!stateRef.current.currentMatch) return;
+    const s = stateRef.current;
+    if (!s.currentMatch) return;
+
+    // ── Anti-spam cooldown gate ──────────────────────────────────────────────
+    // Block rapid re-starts for 90 s after any session ends (completed or reset).
+    if (sessionCooldownEndsAt !== null && Date.now() < sessionCooldownEndsAt) return;
+
     const now = Date.now();
     setPomodoroState((prev) => startPomodoroRun(prev, now));
   };
@@ -731,6 +776,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const resetPomodoro = () => {
+    // Arm cooldown so the user can't immediately start another session.
+    setSessionCooldownEndsAt(Date.now() + 90 * 1000);
     setPomodoroState((prev) => resetPomodoroRun(prev));
   };
 
@@ -741,6 +788,96 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const togglePomodoroDemoMode = () => {
     setPomodoroState((prev) => (prev.isRunning ? prev : createPomodoroState(prev.mode, !prev.demoMode)));
   };
+
+  const triggerIdleWarning = useCallback(() => {
+    const s = stateRef.current;
+    if (!s.currentMatch || !s.pomodoroState.isRunning) return;
+    setPomodoroState((prev) => pausePomodoroRun(prev, Date.now()));
+    setIdleWarningActive(true);
+  }, []);
+
+  const dismissIdleWarning = useCallback((action: 'resume' | 'break') => {
+    setIdleWarningActive(false);
+    if (action === 'resume') {
+      setPomodoroState((prev) => startPomodoroRun(prev, Date.now()));
+    } else {
+      // 'break' — the idle countdown expired or the user explicitly opted to stop.
+      //
+      // Design decision: rather than silently abandoning the session, we check
+      // how much of it was completed. If the session was >= 50% done when idle
+      // fired, we LOG it as an unverified session (interactionCount = 0) so the
+      // user still receives credit for the focus time they did put in.
+      //
+      // < 50% done = genuinely incomplete; we abandon to prevent easy gaming
+      // (e.g. start timer, immediately dismiss overlay, repeat).
+      const s = stateRef.current;
+      const match = s.currentMatch;
+      const pom = s.pomodoroState;
+
+      if (
+        match &&
+        pom.mode !== 'break' &&         // don't log break-mode timers
+        pom.startedAt !== null &&        // session was actually running
+        pom.pausedSecondsLeft !== null   // timer is in paused state (normal after triggerIdleWarning)
+      ) {
+        const elapsedSeconds = pom.durationSeconds - pom.pausedSecondsLeft;
+        const halfDuration = pom.durationSeconds / 2;
+
+        if (elapsedSeconds >= halfDuration) {
+          // Session is >= 50% done — count it as unverified.
+          const startMs = Date.parse(pom.startedAt);
+          const unverifiedSession: import('../types').FocusSession = {
+            id: `sess_${match.id}_${startMs}`,
+            matchId: match.id,
+            userId: match.user1Id,
+            startedAt: pom.startedAt,
+            durationMinutes: MODE_MINUTES[pom.mode],
+            completed: true,
+            interactionCount: 0, // 0 = flagged ⚠ unverified in the session log
+          };
+          setFocusSessions((prev) => addUniqueSession(prev, unverifiedSession));
+        }
+        // < 50% done: session is abandoned, nothing logged.
+      }
+
+      setSessionCooldownEndsAt(Date.now() + 90 * 1000);
+      setPomodoroState((prev) => resetPomodoroRun(prev));
+    }
+  }, []);
+
+  const registerInteractionCounter = useCallback((getCount: () => number) => {
+    interactionCountRef.current = getCount;
+  }, []);
+
+  /**
+   * DEV ONLY — force-completes the currently running Pomodoro and logs the session
+   * with the supplied interactionCount (0 = unverified, >0 = verified).
+   * Silently no-ops in production (import.meta.env.DEV is statically false).
+   */
+  const devCompleteSession = useCallback((interactionCount: number) => {
+    if (!import.meta.env.DEV) return;
+    const s = stateRef.current;
+    const match = s.currentMatch;
+    if (!match) return;
+    if (!s.pomodoroState.isRunning || !s.pomodoroState.startedAt) return;
+    // Settle as if the session ended 1ms ago.
+    const startMs = Date.parse(s.pomodoroState.startedAt);
+    const endMs = startMs + s.pomodoroState.durationSeconds * 1000;
+    const settled = settlePomodoro(s.pomodoroState, endMs + 1, match.id, match.user1Id);
+    if (settled.finished && settled.session) {
+      stateRef.current = { ...s, pomodoroState: settled.next };
+      setPomodoroState(settled.next);
+      const sessionWithCount = { ...settled.session, interactionCount };
+      setFocusSessions((prev) => addUniqueSession(prev, sessionWithCount));
+      setSessionCooldownEndsAt(Date.now() + 90 * 1000);
+    }
+  }, []);
+
+  /** DEV ONLY — instantly clears the 90-second cooldown so the next session can start immediately. */
+  const devSkipCooldown = useCallback(() => {
+    if (!import.meta.env.DEV) return;
+    setSessionCooldownEndsAt(null);
+  }, []);
 
   return (
     <AppContext.Provider
@@ -795,6 +932,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         resetPomodoro,
         selectPomodoroMode,
         togglePomodoroDemoMode,
+        idleWarningActive,
+        triggerIdleWarning,
+        dismissIdleWarning,
+        sessionCooldownEndsAt,
+        registerInteractionCounter,
+        devCompleteSession,
+        devSkipCooldown,
       }}
     >
       {children}
