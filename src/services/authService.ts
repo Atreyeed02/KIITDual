@@ -1,7 +1,7 @@
 /**
- * KIITDual — Frontend Simulated Auth Service
- * Manages frontend authentication operations, OTP validation, and identity generation.
- * Isolated and backend-ready (can be swapped for REST API client in the future).
+ * KIITDual — Auth Service (Supabase-backed)
+ * Handles email OTP request/verify via Supabase Auth.
+ * The OTP is a real 6-digit code sent to the user's inbox.
  */
 
 import { User, AnonymousProfile } from '../types';
@@ -10,42 +10,7 @@ import { validateCollegeEmail } from '../data/collegeConfig';
 import { INITIAL_ANON_USERNAMES } from '../data/mockData';
 import { isUser, isAnonProfile } from './validators';
 import { createId } from '../utils/id';
-
-const DEFAULT_DEV_OTP = '123456';
-
-const toHex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-
-/**
- * One-way hash of the normalized college email (SIMULATION ONLY — the real
- * backend must hash server-side). SHA-256 via Web Crypto; `crypto.subtle` is
- * unavailable on insecure origins (e.g. http://<LAN-IP>), so fall back to a
- * non-cryptographic FNV-1a hash there — still not reversible like base64.
- */
-async function hashEmail(normalizedEmail: string): Promise<string> {
-  const input = `kiitdual:${normalizedEmail}`;
-  const subtle = globalThis.crypto?.subtle;
-  if (subtle) {
-    const digest = await subtle.digest('SHA-256', new TextEncoder().encode(input));
-    return toHex(new Uint8Array(digest));
-  }
-  let h1 = 0x811c9dc5;
-  let h2 = 0x01000193;
-  for (let i = 0; i < input.length; i++) {
-    const c = input.charCodeAt(i);
-    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
-    h2 = Math.imul(h2 ^ c, 0x811c9dc5) >>> 0;
-  }
-  return `fnv_${h1.toString(16).padStart(8, '0')}${h2.toString(16).padStart(8, '0')}`;
-}
-
-/** Key format used by earlier builds: a reversible base64 prefix (not a hash). */
-function legacyEmailKey(normalizedEmail: string): string | null {
-  try {
-    return btoa(normalizedEmail).substring(0, 16);
-  } catch {
-    return null;
-  }
-}
+import { supabase } from '../lib/supabase';
 
 export interface AuthState {
   user: User | null;
@@ -56,95 +21,98 @@ export interface AuthState {
 
 export const authService = {
   /**
-   * Request OTP for a college email
+   * Request a real email OTP via Supabase Auth.
+   * Supabase sends a 6-digit code to the supplied address.
    */
   async requestOtp(email: string): Promise<{ success: boolean; error?: string }> {
-    // Simulate short network latency
-    await new Promise((resolve) => setTimeout(resolve, 600));
-
     const validation = validateCollegeEmail(email);
     if (!validation.isValid) {
       return { success: false, error: validation.error };
     }
 
     const trimmedEmail = email.trim().toLowerCase();
-    
-    // Store pending OTP state in storage for session resilience
-    storage.set('pending_otp_email', trimmedEmail);
-    storage.set('simulated_otp', DEFAULT_DEV_OTP);
 
+    const { error } = await supabase.auth.signInWithOtp({
+      email: trimmedEmail,
+      options: {
+        // Do not auto-create sessions from magic-link clicks — we only want OTP flow.
+        shouldCreateUser: true,
+      },
+    });
+
+    if (error) {
+      // Surface a friendlier message for the most common errors
+      if (error.message.includes('rate')) {
+        return {
+          success: false,
+          error: 'Too many requests. Please wait a moment before requesting another code.',
+        };
+      }
+      return { success: false, error: error.message };
+    }
+
+    storage.set('pending_otp_email', trimmedEmail);
     return { success: true };
   },
 
   /**
-   * Verify the 6-digit OTP
+   * Verify the 6-digit OTP code entered by the user.
+   * On success, Supabase returns a session whose user.id we use as the stable identity.
    */
   async verifyOtp(
     email: string,
     otp: string
   ): Promise<{ success: boolean; error?: string; user?: User; profile?: AnonymousProfile }> {
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    const { data, error } = await supabase.auth.verifyOtp({
+      email: email.trim().toLowerCase(),
+      token: otp,
+      type: 'email',
+    });
 
-    const pendingEmail = storage.get<string | null>('pending_otp_email', null);
-    const expectedOtp = storage.get<string>('simulated_otp', DEFAULT_DEV_OTP);
-
-    if (email.trim().toLowerCase() !== pendingEmail) {
-      return { success: false, error: 'Email mismatch. Please request a new OTP.' };
+    if (error || !data.session) {
+      return {
+        success: false,
+        error: error?.message ?? 'Verification failed. Please check the code and try again.',
+      };
     }
 
-    if (otp !== expectedOtp) {
-      return { success: false, error: 'Invalid 6-digit verification code. (Hint: Use 123456)' };
-    }
+    const supabaseUserId = data.session.user.id;
 
-    // Check if user already exists in storage for this email
-    const normalizedEmail = email.trim().toLowerCase();
-    const emailHash = await hashEmail(normalizedEmail);
-    const readUser = (key: string) => storage.get<User | null>(`user_${key}`, null, (v): v is User | null => isUser(v));
+    // Look up any existing local profile keyed by Supabase user ID
+    const readUser = (key: string) =>
+      storage.get<User | null>(`user_${key}`, null, (v): v is User | null => isUser(v));
     const readProfile = (key: string) =>
-      storage.get<AnonymousProfile | null>(`profile_${key}`, null, (v): v is AnonymousProfile | null =>
-        isAnonProfile(v)
+      storage.get<AnonymousProfile | null>(
+        `profile_${key}`,
+        null,
+        (v): v is AnonymousProfile | null => isAnonProfile(v)
       );
-    let user = readUser(emailHash);
-    let profile = readProfile(emailHash);
 
-    // Migrate accounts created by earlier builds (reversible base64 key) to the hashed key.
-    // The user id is unchanged, so all per-user data (history, active match) is preserved.
-    const legacyKey = legacyEmailKey(normalizedEmail);
-    if (!user && legacyKey) {
-      const legacyUser = readUser(legacyKey);
-      if (legacyUser) {
-        user = { ...legacyUser, collegeEmailHash: emailHash };
-        profile = profile ?? readProfile(legacyKey);
-        storage.set(`user_${emailHash}`, user);
-        if (profile) storage.set(`profile_${emailHash}`, profile);
-        storage.remove(`user_${legacyKey}`);
-        storage.remove(`profile_${legacyKey}`);
-      }
-    }
+    let user = readUser(supabaseUserId);
+    let profile = readProfile(supabaseUserId);
 
     if (!user) {
       user = {
-        id: createId('usr'),
-        collegeEmailHash: emailHash,
+        id: supabaseUserId,
+        collegeEmailHash: supabaseUserId, // Supabase hashes email on its side
         isVerified: true,
         createdAt: new Date().toISOString(),
-        currentStreak: 0, // consecutive completed matches
+        currentStreak: 0,
         totalMatches: 0,
         totalWins: 0,
         totalLosses: 0,
         totalDraws: 0,
       };
-      storage.set(`user_${emailHash}`, user);
+      storage.set(`user_${supabaseUserId}`, user);
     }
 
     if (!profile) {
       profile = this.generateAnonymousProfile(user.id);
-      storage.set(`profile_${emailHash}`, profile);
+      storage.set(`profile_${supabaseUserId}`, profile);
     }
 
-    // Clear pending OTP state
+    // Clear pending state
     storage.remove('pending_otp_email');
-    storage.remove('simulated_otp');
 
     // Save active user & profile
     storage.set('user', user);
@@ -154,13 +122,13 @@ export const authService = {
   },
 
   /**
-   * Generate a deterministic / random anonymous profile
+   * Generate a random anonymous profile for a given user ID.
    */
   generateAnonymousProfile(userId: string, seedPrefix?: string): AnonymousProfile {
     const randomIndex = Math.floor(Math.random() * INITIAL_ANON_USERNAMES.length);
     const baseUsername = INITIAL_ANON_USERNAMES[randomIndex];
     const randomNum = Math.floor(100 + Math.random() * 899);
-    
+
     const anonUsername = seedPrefix || `${baseUsername.replace(/\d+$/, '')}${randomNum}`;
     const avatarSeed = `${anonUsername}_${Date.now()}`;
 
@@ -177,24 +145,24 @@ export const authService = {
    * Persists the account record (stats / streak) so it survives logout & re-login.
    */
   saveUser(user: User): void {
-    storage.set(`user_${user.collegeEmailHash}`, user);
+    storage.set(`user_${user.id}`, user);
   },
 
   /**
    * Persists the anonymous identity for this account.
    */
   saveProfile(user: User, profile: AnonymousProfile): void {
-    storage.set(`profile_${user.collegeEmailHash}`, profile);
+    storage.set(`profile_${user.id}`, profile);
   },
 
   /**
-   * Logout current user
+   * Logout current user — clears Supabase session and local state.
    */
-  logout(): void {
+  async logout(): Promise<void> {
+    await supabase.auth.signOut();
     storage.remove('user');
     storage.remove('anon_profile');
     storage.remove('auth_step');
     storage.remove('pending_otp_email');
-    storage.remove('simulated_otp');
   },
 };

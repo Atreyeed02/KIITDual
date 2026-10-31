@@ -74,6 +74,7 @@ export const PomodoroTimer: React.FC = () => {
       const interval = setInterval(update, 500);
       return () => clearInterval(interval);
     }
+    return undefined;
   }, [sessionCooldownEndsAt]);
 
   // Success feedback when a new focus session is logged.

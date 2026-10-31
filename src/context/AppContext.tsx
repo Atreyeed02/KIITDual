@@ -39,6 +39,7 @@ import {
 } from '../utils/pomodoro';
 import { normalizeHistory } from '../utils/stats';
 import { createId } from '../utils/id';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 
 export type { PomodoroPersistedState } from '../utils/pomodoro';
 export type AuthStep = AuthState['authStep'];
@@ -50,8 +51,7 @@ export interface NotificationPrefs {
   matchResultsReady: boolean;
 }
 
-/** Simulated queue wait before an opponent is "found". */
-const SEARCH_DURATION_MS = 3000;
+
 
 type MatchmakingSession =
   | { status: 'searching'; startedAt: number }
@@ -463,11 +463,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     applyUserData(emptyUserData());
   };
 
-  const logout = () => {
+  const logout = async () => {
     // Keep this user's history / active match on disk for their next sign-in,
     // but never resume a half-finished queue search after re-login.
-    if (user) storage.user.set(user.id, 'matchmaking_session', null);
-    authService.logout();
+    if (user) {
+      storage.user.set(user.id, 'matchmaking_session', null);
+      await matchmakingService.leaveQueue(user.id);
+    }
+    await authService.logout();
     resetSession();
   };
 
@@ -477,7 +480,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // ---------------------------------------------------------------------------
-  // Matchmaking (simulated queue; survives refresh; single cancellable timer)
+  // Matchmaking (Supabase Realtime queue — real peer-to-peer pairing)
   // ---------------------------------------------------------------------------
   const matchmakingState: MatchmakingState =
     matchmakingSession?.status === 'searching'
@@ -487,20 +490,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       : 'idle';
   const foundOpponent = matchmakingSession?.status === 'found' ? matchmakingSession.opponent : null;
 
+  // Refs to hold live Supabase channels so we can unsubscribe on cleanup
+  const queueChannelRef = useRef<RealtimeChannel | null>(null);
+  const matchChannelRef = useRef<RealtimeChannel | null>(null);
+
+  // Subscribe to Realtime while searching
   useEffect(() => {
-    if (matchmakingSession?.status !== 'searching' || !anonProfile) return;
-    const { startedAt } = matchmakingSession;
-    const delay = Math.max(0, startedAt + SEARCH_DURATION_MS - Date.now());
-    const timer = setTimeout(() => {
-      const opponent = matchmakingService.generateSimulatedOpponent(anonProfile);
+    if (matchmakingSession?.status !== 'searching' || !anonProfile || !user) return;
+
+    const userId = user.id;
+
+    // Subscribe to matches table — fires when we get paired
+    matchChannelRef.current = matchmakingService.subscribeToMatches(userId, (match) => {
+      // Opponent is whichever profile is not ours
+      const opponent =
+        match.user1Id === userId ? match.user2Profile : match.user1Profile;
       setMatchmakingSession((prev) =>
-        prev?.status === 'searching' && prev.startedAt === startedAt
-          ? { status: 'found', startedAt, opponent }
+        prev?.status === 'searching'
+          ? { status: 'found', startedAt: prev.startedAt, opponent }
           : prev
       );
-    }, delay);
-    return () => clearTimeout(timer);
-  }, [matchmakingSession, anonProfile]);
+    });
+
+    // Subscribe to queue changes — when 2 users are in queue, the first one pairs them
+    queueChannelRef.current = matchmakingService.subscribeToQueue(async (rows) => {
+      if (rows.length < 2) return;
+      // Small jitter so only one client wins the race to insert the match
+      await new Promise((r) => setTimeout(r, Math.random() * 400));
+      await matchmakingService.attemptPairing(userId, rows);
+    });
+
+    return () => {
+      queueChannelRef.current?.unsubscribe();
+      matchChannelRef.current?.unsubscribe();
+      queueChannelRef.current = null;
+      matchChannelRef.current = null;
+    };
+  }, [matchmakingSession?.status, anonProfile, user]);
 
   const openMatchmakingModal = () => {
     // Only one active match at a time: send the user back to it instead.
@@ -519,13 +545,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const startSearch = () => {
     const s = stateRef.current;
-    if (s.currentMatch || !s.anonProfile || s.matchmakingSession?.status === 'searching') return;
+    if (s.currentMatch || !s.anonProfile || !user || s.matchmakingSession?.status === 'searching') return;
     const session: MatchmakingSession = { status: 'searching', startedAt: Date.now() };
     stateRef.current = { ...s, matchmakingSession: session };
     setMatchmakingSession(session);
+    // Join the Supabase queue
+    matchmakingService.joinQueue(user.id, s.anonProfile);
   };
 
   const cancelSearch = () => {
+    if (user) matchmakingService.leaveQueue(user.id);
     setMatchmakingSession(null);
   };
 
@@ -533,6 +562,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const s = stateRef.current;
     if (s.currentMatch || !s.anonProfile || s.matchmakingSession?.status !== 'found') return;
     const opponent = s.matchmakingSession.opponent;
+    // Use the match from the queue/DB; reconstruct a local Match object from the opponent profile.
+    // The actual match ID comes from the DB row delivered via Realtime — we use createMatch
+    // here to build the local representation (ID will be the Supabase uuid from the row).
     const newMatch = matchmakingService.createMatch(s.anonProfile, opponent);
     // Guard against a double click landing before the next render.
     stateRef.current = { ...s, currentMatch: newMatch, matchmakingSession: null };

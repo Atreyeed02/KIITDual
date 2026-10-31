@@ -12,7 +12,7 @@ export interface CollegeConfig {
 
 export const KIIT_COLLEGE_CONFIG: CollegeConfig = {
   collegeName: 'Kalinga Institute of Industrial Technology (KIIT)',
-  allowedDomains: ['kiit.ac.in', 'college.edu', 'university.edu', 'mit.edu', 'stanford.edu'],
+  allowedDomains: ['kiit.ac.in'],
   defaultDomain: 'kiit.ac.in',
   emailPlaceholder: 'roll_number@kiit.ac.in',
 };
