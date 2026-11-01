@@ -35,20 +35,30 @@ export const authService = {
     const { error } = await supabase.auth.signInWithOtp({
       email: trimmedEmail,
       options: {
-        // Do not auto-create sessions from magic-link clicks — we only want OTP flow.
         shouldCreateUser: true,
+        // Setting emailRedirectTo to undefined (omitting it) along with the
+        // Supabase dashboard "Email OTP" template ensures a 6-digit code is sent,
+        // not a magic-link URL. See Supabase dashboard → Auth → Email Templates.
+        emailRedirectTo: undefined,
       },
     });
 
     if (error) {
-      // Surface a friendlier message for the most common errors
+      // Log full error details to console for debugging
+      console.error('[AuthService] signInWithOtp error:', {
+        message: error.message,
+        status: (error as any).status,
+        code: (error as any).code,
+        details: JSON.stringify(error),
+      });
       if (error.message.includes('rate')) {
         return {
           success: false,
           error: 'Too many requests. Please wait a moment before requesting another code.',
         };
       }
-      return { success: false, error: error.message };
+      // Show full raw error in UI so we can debug
+      return { success: false, error: `[${(error as any).status ?? '?'}] ${error.message}` };
     }
 
     storage.set('pending_otp_email', trimmedEmail);
