@@ -36,10 +36,10 @@ export const authService = {
       email: trimmedEmail,
       options: {
         shouldCreateUser: true,
-        // Setting emailRedirectTo to undefined (omitting it) along with the
-        // Supabase dashboard "Email OTP" template ensures a 6-digit code is sent,
-        // not a magic-link URL. See Supabase dashboard → Auth → Email Templates.
-        emailRedirectTo: undefined,
+        // No redirect URL — forces Supabase to send ONLY the OTP token in the email.
+        // The email template must use {{ .Token }} (not {{ .ConfirmationURL }}).
+        // Also disable "Enable email confirmations" in Supabase Auth Settings so
+        // new users get the OTP flow, not a confirmation link.
       },
     });
 
