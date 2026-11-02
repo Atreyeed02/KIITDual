@@ -169,17 +169,50 @@ export const matchmakingService = {
     });
 
     if (matchError) {
-      console.error('[matchmaking] attemptPairing insert error:', matchError);
+      console.error('[matchmaking] attemptPairing INSERT error:', {
+        message: matchError.message,
+        code: (matchError as any).code,
+        details: (matchError as any).details,
+        hint: (matchError as any).hint,
+      });
       return { paired: false };
     }
 
+    console.log('[matchmaking] Match inserted successfully between', first.user_id, 'and', second.user_id);
+
     // Clean up both queue rows
-    await supabase
+    const { error: deleteError } = await supabase
       .from('matchmaking_queue')
       .delete()
       .in('user_id', [first.user_id, second.user_id]);
 
+    if (deleteError) {
+      console.warn('[matchmaking] Queue cleanup error (non-fatal):', deleteError.message);
+    }
+
     return { paired: true };
+  },
+
+  /**
+   * Poll the matches table directly for a match involving this user.
+   * Used as a reliable fallback when Realtime events are delayed or misconfigured.
+   */
+  async pollForMatch(userId: string): Promise<Match | null> {
+    const { data, error } = await supabase
+      .from('matches')
+      .select('*')
+      .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
+      .eq('status', 'active')
+      .order('start_time', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[matchmaking] pollForMatch error:', error.message);
+      return null;
+    }
+    if (!data) return null;
+    return rowToMatch(data as MatchRow);
   },
 
   /**

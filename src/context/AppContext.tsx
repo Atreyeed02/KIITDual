@@ -513,20 +513,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .select('*')
         .order('inserted_at', { ascending: true });
       if (cancelled || !data || data.length < 2) return;
+      console.log('[matchmaking] Queue has', data.length, 'users — attempting pairing');
       await matchmakingService.attemptPairing(userId, data as any);
     };
 
-    // 1. Immediate poll right after joining — catches the case where a partner
-    //    is already waiting before the Realtime subscription is live.
-    setTimeout(tryPairing, 600);
-
-    // 2. Subscribe to matches table — fires when we get paired
-    matchChannelRef.current = matchmakingService.subscribeToMatches(userId, (match) => {
+    // Helper: apply a real DB match to state (used by both Realtime + polling)
+    const applyRealMatch = (match: import('../types').Match) => {
       if (cancelled) return;
-      // Opponent is whichever profile is not ours
-      const opponent =
-        match.user1Id === userId ? match.user2Profile : match.user1Profile;
-      // Clear bot fallback — a real user was found
+      const opponent = match.user1Id === userId ? match.user2Profile : match.user1Profile;
+      console.log('[matchmaking] Real match found! Opponent:', opponent.anonUsername);
       if (botFallbackTimerRef.current) {
         clearTimeout(botFallbackTimerRef.current);
         botFallbackTimerRef.current = null;
@@ -536,9 +531,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? { status: 'found', startedAt: prev.startedAt, opponent }
           : prev
       );
+    };
+
+    // 1. Immediate poll — catches a waiting partner before Realtime is live
+    setTimeout(tryPairing, 600);
+
+    // 2. DB poll every 2 s — guaranteed fallback if Realtime/RLS is misconfigured
+    const pollInterval = setInterval(async () => {
+      if (cancelled) return;
+      const match = await matchmakingService.pollForMatch(userId);
+      if (match) applyRealMatch(match);
+    }, 2000);
+
+    // 3. Realtime: matches table — fastest path when Supabase is properly configured
+    matchChannelRef.current = matchmakingService.subscribeToMatches(userId, (match) => {
+      applyRealMatch(match);
     });
 
-    // 3. Subscribe to queue changes — when 2 users are in queue, the first one pairs them
+    // 4. Realtime: queue changes — the first user in queue pairs when a second joins
     queueChannelRef.current = matchmakingService.subscribeToQueue(async (rows) => {
       if (cancelled || rows.length < 2) return;
       // Small jitter so only one client wins the race to insert the match
@@ -546,7 +556,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await matchmakingService.attemptPairing(userId, rows);
     });
 
-    // 4. Bot fallback — if no real user pairs within 30 s, match with a bot
+    // 5. Bot fallback — if no real user pairs within 30 s, match with a bot
     botFallbackTimerRef.current = setTimeout(() => {
       if (cancelled) return;
       const s = stateRef.current;
@@ -563,6 +573,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => {
       cancelled = true;
+      clearInterval(pollInterval);
       if (botFallbackTimerRef.current) {
         clearTimeout(botFallbackTimerRef.current);
         botFallbackTimerRef.current = null;
