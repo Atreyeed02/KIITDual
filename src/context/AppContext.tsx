@@ -13,6 +13,7 @@ import { authService, AuthState } from '../services/authService';
 import { matchmakingService } from '../services/matchmakingService';
 import { activityService, ActivityEvent, MAX_ACTIVITY_EVENTS } from '../services/activityService';
 import { matchService } from '../services/matchService';
+import { supabase } from '../lib/supabase';
 import {
   isUser,
   isAnonProfile,
@@ -494,17 +495,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const queueChannelRef = useRef<RealtimeChannel | null>(null);
   const matchChannelRef = useRef<RealtimeChannel | null>(null);
 
+  // Bot-fallback timer ref — cleared when a real match is found
+  const botFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Subscribe to Realtime while searching
   useEffect(() => {
     if (matchmakingSession?.status !== 'searching' || !anonProfile || !user) return;
 
     const userId = user.id;
+    let cancelled = false;
 
-    // Subscribe to matches table — fires when we get paired
+    // Helper: resolve pairing with the current queue snapshot
+    const tryPairing = async () => {
+      if (cancelled) return;
+      const { data } = await supabase
+        .from('matchmaking_queue')
+        .select('*')
+        .order('inserted_at', { ascending: true });
+      if (cancelled || !data || data.length < 2) return;
+      await matchmakingService.attemptPairing(userId, data as any);
+    };
+
+    // 1. Immediate poll right after joining — catches the case where a partner
+    //    is already waiting before the Realtime subscription is live.
+    setTimeout(tryPairing, 600);
+
+    // 2. Subscribe to matches table — fires when we get paired
     matchChannelRef.current = matchmakingService.subscribeToMatches(userId, (match) => {
+      if (cancelled) return;
       // Opponent is whichever profile is not ours
       const opponent =
         match.user1Id === userId ? match.user2Profile : match.user1Profile;
+      // Clear bot fallback — a real user was found
+      if (botFallbackTimerRef.current) {
+        clearTimeout(botFallbackTimerRef.current);
+        botFallbackTimerRef.current = null;
+      }
       setMatchmakingSession((prev) =>
         prev?.status === 'searching'
           ? { status: 'found', startedAt: prev.startedAt, opponent }
@@ -512,15 +538,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
     });
 
-    // Subscribe to queue changes — when 2 users are in queue, the first one pairs them
+    // 3. Subscribe to queue changes — when 2 users are in queue, the first one pairs them
     queueChannelRef.current = matchmakingService.subscribeToQueue(async (rows) => {
-      if (rows.length < 2) return;
+      if (cancelled || rows.length < 2) return;
       // Small jitter so only one client wins the race to insert the match
       await new Promise((r) => setTimeout(r, Math.random() * 400));
       await matchmakingService.attemptPairing(userId, rows);
     });
 
+    // 4. Bot fallback — if no real user pairs within 30 s, match with a bot
+    botFallbackTimerRef.current = setTimeout(() => {
+      if (cancelled) return;
+      const s = stateRef.current;
+      if (s.matchmakingSession?.status !== 'searching' || !s.anonProfile) return;
+      const botOpponent = matchmakingService.generateSimulatedOpponent(s.anonProfile);
+      // Remove ourselves from the DB queue (best-effort)
+      matchmakingService.leaveQueue(userId);
+      setMatchmakingSession((prev) =>
+        prev?.status === 'searching'
+          ? { status: 'found', startedAt: prev.startedAt, opponent: botOpponent }
+          : prev
+      );
+    }, 30_000);
+
     return () => {
+      cancelled = true;
+      if (botFallbackTimerRef.current) {
+        clearTimeout(botFallbackTimerRef.current);
+        botFallbackTimerRef.current = null;
+      }
       queueChannelRef.current?.unsubscribe();
       matchChannelRef.current?.unsubscribe();
       queueChannelRef.current = null;
