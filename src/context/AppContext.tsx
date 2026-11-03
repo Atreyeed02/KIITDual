@@ -487,8 +487,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     matchmakingSession?.status === 'searching'
       ? 'searching'
       : matchmakingSession?.status === 'found'
-      ? 'matched'
-      : 'idle';
+        ? 'matched'
+        : 'idle';
   const foundOpponent = matchmakingSession?.status === 'found' ? matchmakingSession.opponent : null;
 
   // Refs to hold live Supabase channels so we can unsubscribe on cleanup
@@ -556,7 +556,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await matchmakingService.attemptPairing(userId, rows);
     });
 
-    // 5. Bot fallback — if no real user pairs within 30 s, match with a bot
+    // 5. Bot fallback — if no real user pairs within 10 s, match with a bot
     botFallbackTimerRef.current = setTimeout(() => {
       if (cancelled) return;
       const s = stateRef.current;
@@ -569,7 +569,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? { status: 'found', startedAt: prev.startedAt, opponent: botOpponent }
           : prev
       );
-    }, 30_000);
+    }, 10_000);
 
     return () => {
       cancelled = true;
@@ -704,14 +704,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setUser((prev) =>
         prev
           ? {
-              ...prev,
-              totalMatches: prev.totalMatches + 1,
-              totalWins: prev.totalWins + (historyItem.isWinner ? 1 : 0),
-              totalLosses: prev.totalLosses + (!historyItem.isWinner && !historyItem.isDraw ? 1 : 0),
-              totalDraws: prev.totalDraws + (historyItem.isDraw ? 1 : 0),
-              // Streak = consecutive completed matches (win, loss or draw).
-              currentStreak: prev.currentStreak + 1,
-            }
+            ...prev,
+            totalMatches: prev.totalMatches + 1,
+            totalWins: prev.totalWins + (historyItem.isWinner ? 1 : 0),
+            totalLosses: prev.totalLosses + (!historyItem.isWinner && !historyItem.isDraw ? 1 : 0),
+            totalDraws: prev.totalDraws + (historyItem.isDraw ? 1 : 0),
+            // Streak = consecutive completed matches (win, loss or draw).
+            currentStreak: prev.currentStreak + 1,
+          }
           : prev
       );
     }
