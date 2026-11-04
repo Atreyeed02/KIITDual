@@ -222,6 +222,11 @@ export const MatchHistoryPage: React.FC = () => {
                         <Calendar className="w-3 h-3 inline" />
                         {new Date(item.completedAt).toLocaleDateString()}
                       </span>
+                      {item.source === 'demo' && (
+                        <span className="mt-1 inline-block rounded border border-[#FFB547]/40 bg-[rgba(255,181,71,0.08)] px-1.5 py-0.5 text-[9px] font-mono text-[#FFB547]">
+                          SYNTHETIC DEMO
+                        </span>
+                      )}
                     </div>
                   </div>
 

@@ -126,7 +126,12 @@ export const Dashboard: React.FC = () => {
               <Trophy className="w-4 h-4 text-[#FFB547]" aria-hidden="true" />
               Study Performance Metrics
             </h2>
-            <span className="text-xs text-[#94A3B8] font-mono">CAMPUS PILOT STATS</span>
+            <div className="flex flex-wrap items-center gap-2">
+              {matchHistory.some((item) => item.source === 'demo') && (
+                <Badge variant="amber">Includes synthetic demo data</Badge>
+              )}
+              <span className="text-xs text-[#94A3B8] font-mono">CAMPUS PILOT STATS</span>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">

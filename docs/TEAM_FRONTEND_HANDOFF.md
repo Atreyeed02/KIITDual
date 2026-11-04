@@ -1,7 +1,7 @@
 # KIITDual — Team Frontend Handoff
 
 **Audience:** teammates joining the project, especially the backend developers.
-**Frontend status:** feature-complete and QA-verified. It runs **entirely in the browser** on simulated services and localStorage; no backend exists yet.
+**Frontend status:** it runs **entirely in the browser** on simulated services and localStorage; no backend is connected. `backend.zip` contains a candidate backend source tree, but it is not wired to the frontend.
 **Companion docs:** [FRONTEND_BACKEND_CONTRACT.md](./FRONTEND_BACKEND_CONTRACT.md) · [FRONTEND_INTEGRATION_GUIDE.md](./FRONTEND_INTEGRATION_GUIDE.md) · SRS: `../focusmatch-project-documentation.md`
 
 ---
@@ -33,7 +33,8 @@ main.tsx
             ├─ MatchWorkspace          header (⚡ fast-forward, MatchCountdown) · PomodoroTimer · progress
             │                          · TaskManager · OpponentSidebar · DevOutcomeControl (dev only)
             ├─ Scorecard               verdict · head-to-head · breakdown · streak · actions
-            ├─ MatchHistoryPage        Navbar · analytics cards · filters/search · history cards
+            ├─ MatchHistoryPage        Navbar · summary cards · filters/search · history cards
+            ├─ AnalyticsPage           Navbar · local monthly reports · growth charts · device-local goals
             └─ SettingsPage            Navbar · identity · notification toggles · delete account
 ```
 
@@ -54,6 +55,8 @@ There is **no router**. Navigation is `activeView` in context, persisted per use
 | `src/utils/scoring.ts` | **The scoring formula.** Don't change it. |
 | `src/utils/pomodoro.ts` | Pure, timestamp-based pomodoro engine. |
 | `src/utils/stats.ts` | Single source for history statistics and dedupe. |
+| `src/utils/analytics.ts` | UTC monthly reports, recorded activity trends and weekly goal calculations. |
+| `src/dev/analyticsDemo.ts` | Deterministic, development-only synthetic analytics fixture and merge/reset helpers. |
 | `src/data/collegeConfig.ts` | Allowed email domains. This is a UX pre-check only; the server must enforce the real list. |
 | `src/config/env.ts` | Reads `VITE_API_BASE_URL` / `VITE_WS_BASE_URL`. Nothing uses it yet; the future API client should. |
 | `src/dev/` | Dev-only WIN/LOSS/DRAW demo control. |
@@ -75,6 +78,7 @@ There is **no router**. Navigation is `activeView` in context, persisted per use
 
 - **One provider, one hook.** Components destructure what they need from `useApp()`. There's no prop drilling beyond small leaf props.
 - **Per-user state** (history, active match, tasks, sessions, feed, pomodoro, view, scorecard, preferences, search) is loaded together by `loadUserData(userId)`. It's swapped atomically on login, logout and delete (`applyUserData`), so one account's data can never render under another.
+- Personal goals and retained completed focus sessions are also stored under per-account local keys. This isolates accounts in this browser but is not server-enforced or shared across devices.
 - **Persistence:** each per-user value is written by `useUserPersist(userId, key, value)` whenever it changes. With no user signed in, nothing is written.
 - **`stateRef`** mirrors the latest state for timers and double-click guards. Actions such as `confirmMatch` update it immediately, so a second click that lands before the re-render is rejected.
 - **Timers** (all are cleaned up; none speed up when the page re-renders):
@@ -162,7 +166,8 @@ queued → active → completed
 
 1. Closing the **partner-found** dialog **discards** the found partner.
 2. There's **no cross-tab synchronization**. Two open tabs aren't kept in sync; this is acceptable for the frontend-only phase.
-3. **Analytics lives inside Match History.** Don't create a separate Analytics page.
+3. **Personal Analytics is a separate local-only view.** It uses recorded match aggregates for monthly reports and stores completed focus-session timestamps from this version onward. Older match records do not contain individual session dates, so no daily history is reconstructed. No global leaderboard is available until an authenticated shared backend endpoint exists.
+   - In a development build only, Personal Analytics provides **Load Demo Data** and **Reset Demo Data**. Demo matches and sessions are tagged and labeled synthetic, scoped to the signed-in local account, and can be reloaded without duplication. Reset removes only tagged records and restores the pre-demo weekly goals.
 4. Internal storage prefixes remain **`focusmatch_`**. User-facing branding is **KIITDual** everywhere.
 5. The **dev-only WIN/LOSS/DRAW control** must stay development-only. **Production builds must never expose it.** The `import.meta.env.DEV` guard lets Vite strip it, and this is tested.
 6. The **real scoring formula is never modified for demo purposes.**
@@ -175,6 +180,7 @@ queued → active → completed
 - **No UI for "opponent forfeited"**, and forfeited matches don't appear in history. Both need product decisions (contract §2.3 and §3.3).
 - **Notification toggles** are saved but don't trigger anything; there is no notification system.
 - **The opponent status** always reads "Focusing now"; there's no presence data.
+- Personal goals and retained focus-session history are device-local. The current backend archive does not provide a goals API, a historical personal-activity API, or a privacy-limited leaderboard endpoint.
 - The allowed domains include **demo domains** (`college.edu`, `university.edu`, `mit.edu`, `stanford.edu`) alongside `kiit.ac.in`. The server must enforce the real list.
 - **Insecure origins** (e.g. `http://192.168.x.x`) lack Web Crypto, so the simulation falls back to a non-cryptographic hash there. The same email then maps to a different local account than on `localhost`. This only affects simulated accounts.
 - **Boot is synchronous today.** An async `GET /users/me` will need a loading state (the Integration Guide §2).

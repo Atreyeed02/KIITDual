@@ -7,6 +7,8 @@ import {
   FocusSession,
   MatchHistory,
   MatchmakingState,
+  PersonalGoals,
+  AnalyticsDemoState,
 } from '../types';
 import { storage, UserScopedKey } from '../services/storage';
 import { authService, AuthState } from '../services/authService';
@@ -20,6 +22,8 @@ import {
   isMatch,
   isMatchTask,
   isFocusSession,
+  isPersonalGoals,
+  isAnalyticsDemoState,
   isMatchHistory,
   isActivityEvent,
   isString,
@@ -41,10 +45,22 @@ import {
 import { normalizeHistory } from '../utils/stats';
 import { createId } from '../utils/id';
 import type { RealtimeChannel } from '@supabase/supabase-js';
+import {
+  applyAnalyticsDemoDataset,
+  createAnalyticsDemoDataset,
+  isAnalyticsDemoAvailable,
+  removeAnalyticsDemoDataset,
+} from '../dev/analyticsDemo';
 
 export type { PomodoroPersistedState } from '../utils/pomodoro';
 export type AuthStep = AuthState['authStep'];
-export type ActiveView = 'dashboard' | 'active_match_workspace' | 'scorecard' | 'history' | 'settings';
+export type ActiveView =
+  | 'dashboard'
+  | 'active_match_workspace'
+  | 'scorecard'
+  | 'history'
+  | 'analytics'
+  | 'settings';
 
 export interface NotificationPrefs {
   matchFound: boolean;
@@ -70,6 +86,7 @@ const isActiveView = oneOf<ActiveView>([
   'active_match_workspace',
   'scorecard',
   'history',
+  'analytics',
   'settings',
 ]);
 
@@ -110,6 +127,9 @@ interface UserData {
   currentMatch: Match | null;
   matchTasks: MatchTask[];
   focusSessions: FocusSession[];
+  focusSessionHistory: FocusSession[];
+  personalGoals: PersonalGoals;
+  analyticsDemoState: AnalyticsDemoState | null;
   activityEvents: ActivityEvent[];
   pomodoroState: PomodoroPersistedState;
   activeScorecard: MatchHistory | null;
@@ -124,6 +144,9 @@ const emptyUserData = (): UserData => ({
   currentMatch: null,
   matchTasks: [],
   focusSessions: [],
+  focusSessionHistory: [],
+  personalGoals: { weeklyFocusTargetMinutes: null, weeklySessionTarget: null },
+  analyticsDemoState: null,
   activityEvents: [],
   pomodoroState: createPomodoroState(),
   activeScorecard: null,
@@ -155,6 +178,9 @@ function loadUserData(userId: string): UserData {
   const focusSessions = matchId
     ? dedupeById(u.getList(userId, 'focus_sessions', isFocusSession).filter((s) => s.matchId === matchId))
     : [];
+  const focusSessionHistory = dedupeById(
+    u.getList(userId, 'focus_session_history', isFocusSession).filter((session) => session.completed)
+  );
 
   let activityEvents = currentMatch
     ? u.getList(userId, 'activity_events', isActivityEvent).slice(0, MAX_ACTIVITY_EVENTS)
@@ -184,6 +210,19 @@ function loadUserData(userId: string): UserData {
     currentMatch,
     matchTasks,
     focusSessions,
+    focusSessionHistory,
+    personalGoals: u.get(
+      userId,
+      'personal_goals',
+      { weeklyFocusTargetMinutes: null, weeklySessionTarget: null },
+      isPersonalGoals
+    ),
+    analyticsDemoState: u.get(
+      userId,
+      'analytics_demo_state',
+      null,
+      nullable(isAnalyticsDemoState)
+    ),
     activityEvents,
     pomodoroState,
     activeScorecard,
@@ -261,6 +300,12 @@ interface AppContextType {
   // Active Workspace Data
   matchTasks: MatchTask[];
   focusSessions: FocusSession[];
+  focusSessionHistory: FocusSession[];
+  personalGoals: PersonalGoals;
+  updatePersonalGoals: (goals: PersonalGoals) => boolean;
+  isDemoDataLoaded: boolean;
+  loadAnalyticsDemoData: () => boolean;
+  resetAnalyticsDemoData: () => boolean;
   activityEvents: ActivityEvent[];
   pomodoroState: PomodoroPersistedState;
 
@@ -351,6 +396,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [currentMatch, setCurrentMatch] = useState<Match | null>(boot.data.currentMatch);
   const [matchTasks, setMatchTasks] = useState<MatchTask[]>(boot.data.matchTasks);
   const [focusSessions, setFocusSessions] = useState<FocusSession[]>(boot.data.focusSessions);
+  const [focusSessionHistory, setFocusSessionHistory] = useState<FocusSession[]>(
+    boot.data.focusSessionHistory
+  );
+  const [personalGoals, setPersonalGoals] = useState<PersonalGoals>(boot.data.personalGoals);
+  const [analyticsDemoState, setAnalyticsDemoState] = useState<AnalyticsDemoState | null>(
+    boot.data.analyticsDemoState
+  );
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>(boot.data.activityEvents);
   const [pomodoroState, setPomodoroState] = useState<PomodoroPersistedState>(boot.data.pomodoroState);
   const [activeScorecard, setActiveScorecard] = useState<MatchHistory | null>(boot.data.activeScorecard);
@@ -382,6 +434,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentMatch(data.currentMatch);
     setMatchTasks(data.matchTasks);
     setFocusSessions(data.focusSessions);
+    setFocusSessionHistory(data.focusSessionHistory);
+    setPersonalGoals(data.personalGoals);
+    setAnalyticsDemoState(data.analyticsDemoState);
     setActivityEvents(data.activityEvents);
     setPomodoroState(data.pomodoroState);
     setActiveScorecard(data.activeScorecard);
@@ -413,6 +468,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useUserPersist(userId, 'current_match', currentMatch);
   useUserPersist(userId, 'match_tasks', matchTasks);
   useUserPersist(userId, 'focus_sessions', focusSessions);
+  useUserPersist(userId, 'focus_session_history', focusSessionHistory);
+  useUserPersist(userId, 'analytics_demo_state', analyticsDemoState);
   useUserPersist(userId, 'activity_events', activityEvents);
   useUserPersist(userId, 'pomodoro_state', pomodoroState);
   useUserPersist(userId, 'active_scorecard', activeScorecard);
@@ -454,6 +511,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const regenerateIdentity = () => {
     if (!user) return;
     setAnonProfile(authService.generateAnonymousProfile(user.id));
+  };
+
+  const updatePersonalGoals = (goals: PersonalGoals): boolean => {
+    if (!user || !isPersonalGoals(goals)) return false;
+    if (!storage.user.set(user.id, 'personal_goals', goals)) return false;
+    setPersonalGoals(goals);
+    return true;
+  };
+
+  const loadAnalyticsDemoData = (): boolean => {
+    if (!isAnalyticsDemoAvailable() || !user || !anonProfile) return false;
+    const dataset = createAnalyticsDemoDataset(anonProfile, new Date());
+    const snapshot = applyAnalyticsDemoDataset(
+      matchHistory,
+      focusSessionHistory,
+      personalGoals,
+      analyticsDemoState,
+      dataset
+    );
+    const oldState = analyticsDemoState;
+    const previousStateSaved = storage.user.set(user.id, 'analytics_demo_state', snapshot.state);
+    if (!previousStateSaved) return false;
+    if (!storage.user.set(user.id, 'match_history', snapshot.matchHistory)) {
+      storage.user.set(user.id, 'analytics_demo_state', oldState);
+      return false;
+    }
+    if (!storage.user.set(user.id, 'focus_session_history', snapshot.focusSessions)) {
+      storage.user.set(user.id, 'match_history', matchHistory);
+      storage.user.set(user.id, 'analytics_demo_state', oldState);
+      return false;
+    }
+    if (!storage.user.set(user.id, 'personal_goals', snapshot.goals)) {
+      storage.user.set(user.id, 'focus_session_history', focusSessionHistory);
+      storage.user.set(user.id, 'match_history', matchHistory);
+      storage.user.set(user.id, 'analytics_demo_state', oldState);
+      return false;
+    }
+    setMatchHistory(snapshot.matchHistory);
+    setFocusSessionHistory(snapshot.focusSessions);
+    setPersonalGoals(snapshot.goals);
+    setAnalyticsDemoState(snapshot.state);
+    return true;
+  };
+
+  const resetAnalyticsDemoData = (): boolean => {
+    if (!isAnalyticsDemoAvailable() || !user) return false;
+    const snapshot = removeAnalyticsDemoDataset(
+      matchHistory,
+      focusSessionHistory,
+      personalGoals,
+      analyticsDemoState
+    );
+    if (!storage.user.set(user.id, 'match_history', snapshot.matchHistory)) return false;
+    if (!storage.user.set(user.id, 'focus_session_history', snapshot.focusSessions)) {
+      storage.user.set(user.id, 'match_history', matchHistory);
+      return false;
+    }
+    if (!storage.user.set(user.id, 'personal_goals', snapshot.goals)) {
+      storage.user.set(user.id, 'focus_session_history', focusSessionHistory);
+      storage.user.set(user.id, 'match_history', matchHistory);
+      return false;
+    }
+    if (!storage.user.set(user.id, 'analytics_demo_state', null)) {
+      storage.user.set(user.id, 'personal_goals', personalGoals);
+      storage.user.set(user.id, 'focus_session_history', focusSessionHistory);
+      storage.user.set(user.id, 'match_history', matchHistory);
+      return false;
+    }
+    setMatchHistory(snapshot.matchHistory);
+    setFocusSessionHistory(snapshot.focusSessions);
+    setPersonalGoals(snapshot.goals);
+    setAnalyticsDemoState(null);
+    return true;
   };
 
   const resetSession = () => {
@@ -681,6 +811,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // A pomodoro that finished before the match ended still counts (e.g. browser was closed).
     const settled = settlePomodoro(s.pomodoroState, endMs, match.id, match.user1Id);
     const sessions = settled.session ? addUniqueSession(s.focusSessions, settled.session) : s.focusSessions;
+    setFocusSessionHistory((prev) =>
+      dedupeById([...prev, ...sessions.filter((session) => session.completed)])
+    );
 
     const existing = s.matchHistory.find((h) => h.match.id === match.id);
     const alreadyCounted = !!existing || s.completedMatchIds.includes(match.id);
@@ -748,6 +881,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             interactionCount: interactionCountRef.current(),
           };
           setFocusSessions((prev) => addUniqueSession(prev, sessionWithCount));
+          setFocusSessionHistory((prev) => addUniqueSession(prev, sessionWithCount));
           // Session completed — arm the anti-spam cooldown.
           setSessionCooldownEndsAt(Date.now() + 90 * 1000);
         }
@@ -925,6 +1059,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             interactionCount: 0, // 0 = flagged ⚠ unverified in the session log
           };
           setFocusSessions((prev) => addUniqueSession(prev, unverifiedSession));
+          setFocusSessionHistory((prev) => addUniqueSession(prev, unverifiedSession));
         }
         // < 50% done: session is abandoned, nothing logged.
       }
@@ -958,6 +1093,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setPomodoroState(settled.next);
       const sessionWithCount = { ...settled.session, interactionCount };
       setFocusSessions((prev) => addUniqueSession(prev, sessionWithCount));
+      setFocusSessionHistory((prev) => addUniqueSession(prev, sessionWithCount));
       setSessionCooldownEndsAt(Date.now() + 90 * 1000);
     }
   }, []);
@@ -985,6 +1121,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isMatchmakingModalOpen,
         matchTasks,
         focusSessions,
+        focusSessionHistory,
+        personalGoals,
+        updatePersonalGoals,
+        isDemoDataLoaded: analyticsDemoState !== null,
+        loadAnalyticsDemoData,
+        resetAnalyticsDemoData,
         activityEvents,
         pomodoroState,
         activeScorecard,
