@@ -181,6 +181,12 @@ textarea:focus-visible {
   animation: pulseDot 2s infinite ease-in-out;
 }
 
+/* Water-fill timer: one wave tile is 50% of the 200%-wide wave, so shifting by -50% loops seamlessly. */
+@keyframes waterWave {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
