@@ -34,7 +34,8 @@ export const ProgressRing: React.FC<ProgressRingProps> = ({
   };
 
   const level = Math.min(100, Math.max(0, progress));
-  const wavePath = 'M0 15 Q 25 0 50 15 T 100 15 T 150 15 T 200 15 V30 H0 Z';
+  const crestPath = 'M0 15 Q 25 0 50 15 T 100 15 T 150 15 T 200 15';
+  const wavePath = `${crestPath} V30 H0 Z`;
   const waveStyle = (seconds: number): React.CSSProperties => ({
     animation: `waterWave ${seconds}s linear infinite`,
     animationPlayState: waterAnimated ? 'running' : 'paused',
@@ -59,10 +60,15 @@ export const ProgressRing: React.FC<ProgressRingProps> = ({
               className="absolute left-0 right-0 bottom-0"
               style={{ height: `${level}%`, transition: 'height 1s linear' }}
             >
-              <div className="absolute inset-x-0 top-4 bottom-0" style={{ background: activeColor.stroke, opacity: 0.28 }} />
+              <div className="absolute inset-x-0 top-4 bottom-0" style={{ background: activeColor.stroke, opacity: 0.42 }} />
+              {/* Depth: water darkens towards the bottom */}
+              <div
+                className="absolute inset-x-0 top-4 bottom-0"
+                style={{ background: 'linear-gradient(to bottom, rgba(15,20,32,0), rgba(15,20,32,0.4))' }}
+              />
               {[
-                { seconds: 6, opacity: 0.35, offset: 0 },
-                { seconds: 9, opacity: 0.25, offset: -5 },
+                { seconds: 6, opacity: 0.5, offset: 0, crest: true },
+                { seconds: 9, opacity: 0.35, offset: -5, crest: false },
               ].map((layer) => (
                 <svg
                   key={layer.seconds}
@@ -72,6 +78,16 @@ export const ProgressRing: React.FC<ProgressRingProps> = ({
                   style={{ width: '200%', height: 18, marginTop: layer.offset, ...waveStyle(layer.seconds) }}
                 >
                   <path d={wavePath} fill={activeColor.stroke} fillOpacity={layer.opacity} />
+                  {layer.crest && (
+                    <path
+                      d={crestPath}
+                      fill="none"
+                      stroke="#F1F5F9"
+                      strokeOpacity={0.55}
+                      strokeWidth={1.5}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  )}
                 </svg>
               ))}
             </div>
