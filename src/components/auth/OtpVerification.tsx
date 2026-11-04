@@ -4,7 +4,7 @@ import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { LoadingIndicator } from '../ui/LoadingIndicator';
-import { ShieldCheck, ArrowLeft, RefreshCw, AlertCircle, Info } from 'lucide-react';
+import { ShieldCheck, ArrowLeft, RefreshCw, AlertCircle } from 'lucide-react';
 
 export const OtpVerification: React.FC = () => {
   const { pendingEmail, verifyOtp, requestOtp, setAuthStep } = useApp();
@@ -146,19 +146,12 @@ export const OtpVerification: React.FC = () => {
             </Badge>
             <h2 className="text-xl font-bold text-[#F1F5F9]">Verification Code</h2>
             <p className="text-xs text-[#94A3B8]">
-              We sent a 6-digit code to{' '}
-              <span className="font-mono text-[#6C7CFF] font-semibold break-all">{pendingEmail}</span>
+              A 6-digit verification code has been sent to{' '}
+              <span className="font-mono text-[#6C7CFF] font-semibold break-all">{pendingEmail}</span>.
+              Check your inbox (and spam folder).
             </p>
           </div>
 
-          {/* Dev Simulated OTP Notice Banner */}
-          <div className="p-3 bg-[rgba(108,124,255,0.1)] border border-[#6C7CFF]/30 rounded-xl text-xs text-[#6C7CFF] flex items-center gap-2.5">
-            <Info className="w-4 h-4 shrink-0 text-[#6C7CFF]" />
-            <div>
-              <span className="font-semibold block">Simulated OTP Code:</span>
-              <span className="font-mono text-sm tracking-wider font-bold text-[#F1F5F9]">123456</span>
-            </div>
-          </div>
 
           <form onSubmit={handleVerify} className="space-y-6">
             {/* 6-Digit OTP Inputs */}

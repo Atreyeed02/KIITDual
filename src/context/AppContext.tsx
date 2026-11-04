@@ -13,6 +13,7 @@ import { authService, AuthState } from '../services/authService';
 import { matchmakingService } from '../services/matchmakingService';
 import { activityService, ActivityEvent, MAX_ACTIVITY_EVENTS } from '../services/activityService';
 import { matchService } from '../services/matchService';
+import { supabase } from '../lib/supabase';
 import {
   isUser,
   isAnonProfile,
@@ -29,6 +30,7 @@ import {
 import {
   PomodoroMode,
   PomodoroPersistedState,
+  MODE_MINUTES,
   createPomodoroState,
   isPomodoroState,
   startPomodoro as startPomodoroRun,
@@ -38,6 +40,7 @@ import {
 } from '../utils/pomodoro';
 import { normalizeHistory } from '../utils/stats';
 import { createId } from '../utils/id';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 
 export type { PomodoroPersistedState } from '../utils/pomodoro';
 export type AuthStep = AuthState['authStep'];
@@ -49,8 +52,7 @@ export interface NotificationPrefs {
   matchResultsReady: boolean;
 }
 
-/** Simulated queue wait before an opponent is "found". */
-const SEARCH_DURATION_MS = 3000;
+
 
 type MatchmakingSession =
   | { status: 'searching'; startedAt: number }
@@ -305,6 +307,27 @@ interface AppContextType {
   selectPomodoroMode: (mode: PomodoroMode) => void;
   togglePomodoroDemoMode: () => void;
 
+  // Idle Detection (Netflix-style "Still Studying?" overlay)
+  idleWarningActive: boolean;
+  triggerIdleWarning: () => void;
+  dismissIdleWarning: (action: 'resume' | 'break') => void;
+
+  // Anti-spam: cooldown between sessions
+  /** Timestamp (ms) after which the next session can be started, or null if no cooldown. */
+  sessionCooldownEndsAt: number | null;
+
+  /**
+   * Called by MatchWorkspace to wire up the interaction counter.
+   * The ref's current value is read by AppContext when a session completes.
+   */
+  registerInteractionCounter: (getCount: () => number) => void;
+
+  // Dev-only demo actions (no-ops in production)
+  /** Force-completes the currently running Pomodoro session with a given interaction count. */
+  devCompleteSession: (interactionCount: number) => void;
+  /** Instantly clears the 90-second anti-spam cooldown so you can start the next session immediately. */
+  devSkipCooldown: () => void;
+
   // Lifecycle & Scorecard Actions
   finalizeCurrentMatch: () => void;
   fastForwardMatchExpiry: () => void;
@@ -339,6 +362,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isMatchmakingModalOpen, setIsMatchmakingModalOpen] = useState<boolean>(
     !!boot.data.matchmakingSession && boot.authStep === 'authenticated'
   );
+  const [idleWarningActive, setIdleWarningActive] = useState<boolean>(false);
+  // Cooldown end timestamp (null = no cooldown active). Not persisted — resets on refresh.
+  const [sessionCooldownEndsAt, setSessionCooldownEndsAt] = useState<number | null>(null);
+
+  // Written by MatchWorkspace via registerInteractionCounter so the tick can
+  // read the live interaction count when a session completes naturally.
+  const interactionCountRef = useRef<() => number>(() => 0);
 
   // Latest-state mirror for timers and guards (avoids stale closures and lets
   // actions reject a second call that arrives before React re-renders).
@@ -434,11 +464,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     applyUserData(emptyUserData());
   };
 
-  const logout = () => {
+  const logout = async () => {
     // Keep this user's history / active match on disk for their next sign-in,
     // but never resume a half-finished queue search after re-login.
-    if (user) storage.user.set(user.id, 'matchmaking_session', null);
-    authService.logout();
+    if (user) {
+      storage.user.set(user.id, 'matchmaking_session', null);
+      await matchmakingService.leaveQueue(user.id);
+    }
+    await authService.logout();
     resetSession();
   };
 
@@ -448,30 +481,109 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // ---------------------------------------------------------------------------
-  // Matchmaking (simulated queue; survives refresh; single cancellable timer)
+  // Matchmaking (Supabase Realtime queue — real peer-to-peer pairing)
   // ---------------------------------------------------------------------------
   const matchmakingState: MatchmakingState =
     matchmakingSession?.status === 'searching'
       ? 'searching'
       : matchmakingSession?.status === 'found'
-      ? 'matched'
-      : 'idle';
+        ? 'matched'
+        : 'idle';
   const foundOpponent = matchmakingSession?.status === 'found' ? matchmakingSession.opponent : null;
 
+  // Refs to hold live Supabase channels so we can unsubscribe on cleanup
+  const queueChannelRef = useRef<RealtimeChannel | null>(null);
+  const matchChannelRef = useRef<RealtimeChannel | null>(null);
+
+  // Bot-fallback timer ref — cleared when a real match is found
+  const botFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Subscribe to Realtime while searching
   useEffect(() => {
-    if (matchmakingSession?.status !== 'searching' || !anonProfile) return;
-    const { startedAt } = matchmakingSession;
-    const delay = Math.max(0, startedAt + SEARCH_DURATION_MS - Date.now());
-    const timer = setTimeout(() => {
-      const opponent = matchmakingService.generateSimulatedOpponent(anonProfile);
+    if (matchmakingSession?.status !== 'searching' || !anonProfile || !user) return;
+
+    const userId = user.id;
+    let cancelled = false;
+
+    // Helper: resolve pairing with the current queue snapshot
+    const tryPairing = async () => {
+      if (cancelled) return;
+      const { data } = await supabase
+        .from('matchmaking_queue')
+        .select('*')
+        .order('inserted_at', { ascending: true });
+      if (cancelled || !data || data.length < 2) return;
+      console.log('[matchmaking] Queue has', data.length, 'users — attempting pairing');
+      await matchmakingService.attemptPairing(userId, data as any);
+    };
+
+    // Helper: apply a real DB match to state (used by both Realtime + polling)
+    const applyRealMatch = (match: import('../types').Match) => {
+      if (cancelled) return;
+      const opponent = match.user1Id === userId ? match.user2Profile : match.user1Profile;
+      console.log('[matchmaking] Real match found! Opponent:', opponent.anonUsername);
+      if (botFallbackTimerRef.current) {
+        clearTimeout(botFallbackTimerRef.current);
+        botFallbackTimerRef.current = null;
+      }
       setMatchmakingSession((prev) =>
-        prev?.status === 'searching' && prev.startedAt === startedAt
-          ? { status: 'found', startedAt, opponent }
+        prev?.status === 'searching'
+          ? { status: 'found', startedAt: prev.startedAt, opponent }
           : prev
       );
-    }, delay);
-    return () => clearTimeout(timer);
-  }, [matchmakingSession, anonProfile]);
+    };
+
+    // 1. Immediate poll — catches a waiting partner before Realtime is live
+    setTimeout(tryPairing, 600);
+
+    // 2. DB poll every 2 s — guaranteed fallback if Realtime/RLS is misconfigured
+    const pollInterval = setInterval(async () => {
+      if (cancelled) return;
+      const match = await matchmakingService.pollForMatch(userId);
+      if (match) applyRealMatch(match);
+    }, 2000);
+
+    // 3. Realtime: matches table — fastest path when Supabase is properly configured
+    matchChannelRef.current = matchmakingService.subscribeToMatches(userId, (match) => {
+      applyRealMatch(match);
+    });
+
+    // 4. Realtime: queue changes — the first user in queue pairs when a second joins
+    queueChannelRef.current = matchmakingService.subscribeToQueue(async (rows) => {
+      if (cancelled || rows.length < 2) return;
+      // Small jitter so only one client wins the race to insert the match
+      await new Promise((r) => setTimeout(r, Math.random() * 400));
+      await matchmakingService.attemptPairing(userId, rows);
+    });
+
+    // 5. Bot fallback — if no real user pairs within 10 s, match with a bot
+    botFallbackTimerRef.current = setTimeout(() => {
+      if (cancelled) return;
+      const s = stateRef.current;
+      if (s.matchmakingSession?.status !== 'searching' || !s.anonProfile) return;
+      const botOpponent = matchmakingService.generateSimulatedOpponent(s.anonProfile);
+      // Remove ourselves from the DB queue (best-effort)
+      matchmakingService.leaveQueue(userId);
+      setMatchmakingSession((prev) =>
+        prev?.status === 'searching'
+          ? { status: 'found', startedAt: prev.startedAt, opponent: botOpponent }
+          : prev
+      );
+    }, 10_000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(pollInterval);
+      if (botFallbackTimerRef.current) {
+        clearTimeout(botFallbackTimerRef.current);
+        botFallbackTimerRef.current = null;
+      }
+      queueChannelRef.current?.unsubscribe();
+      matchChannelRef.current?.unsubscribe();
+      queueChannelRef.current = null;
+      matchChannelRef.current = null;
+    };
+  }, [matchmakingSession?.status, anonProfile, user]);
 
   const openMatchmakingModal = () => {
     // Only one active match at a time: send the user back to it instead.
@@ -490,13 +602,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const startSearch = () => {
     const s = stateRef.current;
-    if (s.currentMatch || !s.anonProfile || s.matchmakingSession?.status === 'searching') return;
+    if (s.currentMatch || !s.anonProfile || !user || s.matchmakingSession?.status === 'searching') return;
     const session: MatchmakingSession = { status: 'searching', startedAt: Date.now() };
     stateRef.current = { ...s, matchmakingSession: session };
     setMatchmakingSession(session);
+    // Join the Supabase queue
+    matchmakingService.joinQueue(user.id, s.anonProfile);
   };
 
   const cancelSearch = () => {
+    if (user) matchmakingService.leaveQueue(user.id);
     setMatchmakingSession(null);
   };
 
@@ -504,6 +619,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const s = stateRef.current;
     if (s.currentMatch || !s.anonProfile || s.matchmakingSession?.status !== 'found') return;
     const opponent = s.matchmakingSession.opponent;
+    // Use the match from the queue/DB; reconstruct a local Match object from the opponent profile.
+    // The actual match ID comes from the DB row delivered via Realtime — we use createMatch
+    // here to build the local representation (ID will be the Supabase uuid from the row).
     const newMatch = matchmakingService.createMatch(s.anonProfile, opponent);
     // Guard against a double click landing before the next render.
     stateRef.current = { ...s, currentMatch: newMatch, matchmakingSession: null };
@@ -586,14 +704,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setUser((prev) =>
         prev
           ? {
-              ...prev,
-              totalMatches: prev.totalMatches + 1,
-              totalWins: prev.totalWins + (historyItem.isWinner ? 1 : 0),
-              totalLosses: prev.totalLosses + (!historyItem.isWinner && !historyItem.isDraw ? 1 : 0),
-              totalDraws: prev.totalDraws + (historyItem.isDraw ? 1 : 0),
-              // Streak = consecutive completed matches (win, loss or draw).
-              currentStreak: prev.currentStreak + 1,
-            }
+            ...prev,
+            totalMatches: prev.totalMatches + 1,
+            totalWins: prev.totalWins + (historyItem.isWinner ? 1 : 0),
+            totalLosses: prev.totalLosses + (!historyItem.isWinner && !historyItem.isDraw ? 1 : 0),
+            totalDraws: prev.totalDraws + (historyItem.isDraw ? 1 : 0),
+            // Streak = consecutive completed matches (win, loss or draw).
+            currentStreak: prev.currentStreak + 1,
+          }
           : prev
       );
     }
@@ -622,7 +740,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         stateRef.current = { ...s, pomodoroState: settled.next };
         setPomodoroState(settled.next);
         const session = settled.session;
-        if (session) setFocusSessions((prev) => addUniqueSession(prev, session));
+        if (session) {
+          // Stamp the session with how many browser interactions occurred.
+          // 0 interactions → flagged as "unverified" in the user's own stats.
+          const sessionWithCount = {
+            ...session,
+            interactionCount: interactionCountRef.current(),
+          };
+          setFocusSessions((prev) => addUniqueSession(prev, sessionWithCount));
+          // Session completed — arm the anti-spam cooldown.
+          setSessionCooldownEndsAt(Date.now() + 90 * 1000);
+        }
       }
     };
     tick();
@@ -720,7 +848,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const startPomodoro = () => {
-    if (!stateRef.current.currentMatch) return;
+    const s = stateRef.current;
+    if (!s.currentMatch) return;
+
+    // ── Anti-spam cooldown gate ──────────────────────────────────────────────
+    // Block rapid re-starts for 90 s after any session ends (completed or reset).
+    if (sessionCooldownEndsAt !== null && Date.now() < sessionCooldownEndsAt) return;
+
     const now = Date.now();
     setPomodoroState((prev) => startPomodoroRun(prev, now));
   };
@@ -731,6 +865,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const resetPomodoro = () => {
+    // Arm cooldown so the user can't immediately start another session.
+    setSessionCooldownEndsAt(Date.now() + 90 * 1000);
     setPomodoroState((prev) => resetPomodoroRun(prev));
   };
 
@@ -741,6 +877,96 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const togglePomodoroDemoMode = () => {
     setPomodoroState((prev) => (prev.isRunning ? prev : createPomodoroState(prev.mode, !prev.demoMode)));
   };
+
+  const triggerIdleWarning = useCallback(() => {
+    const s = stateRef.current;
+    if (!s.currentMatch || !s.pomodoroState.isRunning) return;
+    setPomodoroState((prev) => pausePomodoroRun(prev, Date.now()));
+    setIdleWarningActive(true);
+  }, []);
+
+  const dismissIdleWarning = useCallback((action: 'resume' | 'break') => {
+    setIdleWarningActive(false);
+    if (action === 'resume') {
+      setPomodoroState((prev) => startPomodoroRun(prev, Date.now()));
+    } else {
+      // 'break' — the idle countdown expired or the user explicitly opted to stop.
+      //
+      // Design decision: rather than silently abandoning the session, we check
+      // how much of it was completed. If the session was >= 50% done when idle
+      // fired, we LOG it as an unverified session (interactionCount = 0) so the
+      // user still receives credit for the focus time they did put in.
+      //
+      // < 50% done = genuinely incomplete; we abandon to prevent easy gaming
+      // (e.g. start timer, immediately dismiss overlay, repeat).
+      const s = stateRef.current;
+      const match = s.currentMatch;
+      const pom = s.pomodoroState;
+
+      if (
+        match &&
+        pom.mode !== 'break' &&         // don't log break-mode timers
+        pom.startedAt !== null &&        // session was actually running
+        pom.pausedSecondsLeft !== null   // timer is in paused state (normal after triggerIdleWarning)
+      ) {
+        const elapsedSeconds = pom.durationSeconds - pom.pausedSecondsLeft;
+        const halfDuration = pom.durationSeconds / 2;
+
+        if (elapsedSeconds >= halfDuration) {
+          // Session is >= 50% done — count it as unverified.
+          const startMs = Date.parse(pom.startedAt);
+          const unverifiedSession: import('../types').FocusSession = {
+            id: `sess_${match.id}_${startMs}`,
+            matchId: match.id,
+            userId: match.user1Id,
+            startedAt: pom.startedAt,
+            durationMinutes: MODE_MINUTES[pom.mode],
+            completed: true,
+            interactionCount: 0, // 0 = flagged ⚠ unverified in the session log
+          };
+          setFocusSessions((prev) => addUniqueSession(prev, unverifiedSession));
+        }
+        // < 50% done: session is abandoned, nothing logged.
+      }
+
+      setSessionCooldownEndsAt(Date.now() + 90 * 1000);
+      setPomodoroState((prev) => resetPomodoroRun(prev));
+    }
+  }, []);
+
+  const registerInteractionCounter = useCallback((getCount: () => number) => {
+    interactionCountRef.current = getCount;
+  }, []);
+
+  /**
+   * DEV ONLY — force-completes the currently running Pomodoro and logs the session
+   * with the supplied interactionCount (0 = unverified, >0 = verified).
+   * Silently no-ops in production (import.meta.env.DEV is statically false).
+   */
+  const devCompleteSession = useCallback((interactionCount: number) => {
+    if (!import.meta.env.DEV) return;
+    const s = stateRef.current;
+    const match = s.currentMatch;
+    if (!match) return;
+    if (!s.pomodoroState.isRunning || !s.pomodoroState.startedAt) return;
+    // Settle as if the session ended 1ms ago.
+    const startMs = Date.parse(s.pomodoroState.startedAt);
+    const endMs = startMs + s.pomodoroState.durationSeconds * 1000;
+    const settled = settlePomodoro(s.pomodoroState, endMs + 1, match.id, match.user1Id);
+    if (settled.finished && settled.session) {
+      stateRef.current = { ...s, pomodoroState: settled.next };
+      setPomodoroState(settled.next);
+      const sessionWithCount = { ...settled.session, interactionCount };
+      setFocusSessions((prev) => addUniqueSession(prev, sessionWithCount));
+      setSessionCooldownEndsAt(Date.now() + 90 * 1000);
+    }
+  }, []);
+
+  /** DEV ONLY — instantly clears the 90-second cooldown so the next session can start immediately. */
+  const devSkipCooldown = useCallback(() => {
+    if (!import.meta.env.DEV) return;
+    setSessionCooldownEndsAt(null);
+  }, []);
 
   return (
     <AppContext.Provider
@@ -795,6 +1021,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         resetPomodoro,
         selectPomodoroMode,
         togglePomodoroDemoMode,
+        idleWarningActive,
+        triggerIdleWarning,
+        dismissIdleWarning,
+        sessionCooldownEndsAt,
+        registerInteractionCounter,
+        devCompleteSession,
+        devSkipCooldown,
       }}
     >
       {children}

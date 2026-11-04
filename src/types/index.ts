@@ -60,6 +60,13 @@ export interface FocusSession {
   startedAt: string;
   durationMinutes: number; // e.g. 25 or 50
   completed: boolean;     // True if finished without cancelling early
+  /**
+   * Number of browser interactions (keydown / mousedown / click / scroll / touch)
+   * recorded during this session. 0 means the page was untouched — flagged as
+   * "unverified" in the user's own session log for transparency.
+   * Undefined for sessions from older builds (treated as unverified).
+   */
+  interactionCount?: number;
 }
 
 // End-of-match calculated scorecard for a participant
@@ -70,7 +77,7 @@ export interface MatchResult {
   totalFocusMinutes: number;
   tasksCompleted: number;
   sessionsCompleted: number;
-  finalScore: number; // Formula: (0.5 * focus_mins) + (30 * tasks) + (10 * sessions)
+  finalScore: number; // Formula v2: (1.0 * focus_mins) + (15 * sessions)
 }
 
 // Historical record for user match log
