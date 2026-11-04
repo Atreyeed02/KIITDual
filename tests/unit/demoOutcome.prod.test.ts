@@ -18,7 +18,7 @@ const out = matchService.finalizeMatch({ match, userProfile: me, focusSessions: 
 
 eq('production build flag is false', isDevBuild, false);
 eq('stored dev outcome is ignored (reads as natural)', demoOutcome.get(), 'natural');
-eq('natural opponent used (>= 105 pts, user loses with 30)', [out.opponentResult.finalScore >= 105, out.isWinner], [true, false]);
+eq('natural opponent used (>= 80 pts, user loses with 0)', [out.opponentResult.finalScore >= 80, out.isWinner], [true, false]);
 demoOutcome.set('draw');
 eq('set() is a no-op in production', mem.get('focusmatch_dev_demo_outcome'), '"win"');
 

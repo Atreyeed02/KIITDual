@@ -113,7 +113,12 @@ function opponentResultFor(
     : outcome === 'win'
       ? 0
       : userResult.tasksCompleted;
-  const sessionsCompleted = outcome === 'win' ? 0 : userResult.sessionsCompleted;
+  // v2 score ignores tasks, so a loss needs one extra session (+15 pts).
+  const sessionsCompleted = outcome === 'win'
+    ? 0
+    : outcome === 'loss'
+      ? userResult.sessionsCompleted + 1
+      : userResult.sessionsCompleted;
   return {
     id: `demo_result_opponent_${matchId}`,
     matchId,

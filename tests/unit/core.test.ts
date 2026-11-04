@@ -17,12 +17,12 @@ import { isMatchHistory } from '../../src/services/validators';
 
 
 // ---- 5. Score engine ----
-eq('score case 1 (100m, 3 tasks, 2 sessions) = 160', calculateScore(100, 3, 2), 160);
-eq('score case 2 (0,0,0) = 0', calculateScore(0, 0, 0), 0);
-eq('score case 3 (60m, 2 tasks, 1 session) = 100', calculateScore(60, 2, 1), 100);
-eq('score half-point (25m, 0, 1) = 22.5', calculateScore(25, 0, 1), 22.5);
-eq('breakdown case 1', getScoreBreakdown(100, 3, 2), { focusMinutes: 100, tasksCompleted: 3, sessionsCompleted: 2, focusPoints: 50, taskPoints: 90, sessionPoints: 20, finalScore: 160 });
-eq('negative inputs clamp to 0', calculateScore(-5, -1, -2), 0);
+eq('score case 1 (100m, 2 sessions) = 130', calculateScore(100, 2), 130);
+eq('score case 2 (0,0) = 0', calculateScore(0, 0), 0);
+eq('score case 3 (60m, 1 session) = 75', calculateScore(60, 1), 75);
+eq('score (25m, 1 session) = 40', calculateScore(25, 1), 40);
+eq('breakdown case 1', getScoreBreakdown(100, 2), { focusMinutes: 100, sessionsCompleted: 2, focusPoints: 100, sessionPoints: 30, finalScore: 130 });
+eq('negative inputs clamp to 0', calculateScore(-5, -2), 0);
 
 const u = authService.generateAnonymousProfile('usr_me');
 const opp = matchmakingService.generateSimulatedOpponent(u);
@@ -38,7 +38,7 @@ const task = (id: string, m: string, done: boolean) => ({ id, matchId: m, userId
 const res = matchService.calculateUserResult(match.id, 'usr_me',
   [sess('s1', match.id), sess('s1', match.id) /* duplicate id */, sess('s2', match.id, false) /* cancelled */, sess('s3', other) /* other match */, sess('s4', match.id, true, 50)],
   [task('t1', match.id, true), task('t2', match.id, false), task('t3', other, true)]);
-eq('user result counts only completed, unique, same-match sessions/tasks', [res.totalFocusMinutes, res.sessionsCompleted, res.tasksCompleted, res.finalScore], [75, 2, 1, 37.5 + 30 + 20]);
+eq('user result counts only completed, unique, same-match sessions/tasks', [res.totalFocusMinutes, res.sessionsCompleted, res.tasksCompleted, res.finalScore], [75, 2, 1, 75 + 30]);
 
 // Opponent result persisted & stable
 const o1 = matchService.getOrCreateOpponentResult(match);
@@ -46,7 +46,7 @@ const o2 = matchService.getOrCreateOpponentResult(match);
 eq('opponent result stable across calls', o1, o2);
 mem.delete(`focusmatch_opp_result_${match.id}`);
 eq('opponent result deterministic even if cache lost', matchService.getOrCreateOpponentResult(match).finalScore, o1.finalScore);
-eq('opponent score obeys formula', o1.finalScore, calculateScore(o1.totalFocusMinutes, o1.tasksCompleted, o1.sessionsCompleted));
+eq('opponent score obeys formula', o1.finalScore, calculateScore(o1.totalFocusMinutes, o1.sessionsCompleted));
 
 const fin = matchService.finalizeMatch({ match, userProfile: u, focusSessions: [], matchTasks: [] });
 eq('finalized history item passes validator', isMatchHistory(fin.historyItem), true);
