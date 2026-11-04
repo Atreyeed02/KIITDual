@@ -104,7 +104,7 @@ export const PomodoroTimer: React.FC = () => {
   };
 
   const totalDuration = pomodoroState.durationSeconds;
-  const progressPercent = Math.round(((totalDuration - secondsLeft) / totalDuration) * 100);
+  const progressPercent = ((totalDuration - secondsLeft) / totalDuration) * 100;
 
   return (
     <div className="flex flex-col items-center space-y-6">
@@ -140,6 +140,8 @@ export const PomodoroTimer: React.FC = () => {
           size={250}
           strokeWidth={10}
           variant={pomodoroState.mode === 'deep' ? 'indigo' : pomodoroState.mode === 'break' ? 'amber' : 'teal'}
+          water
+          waterAnimated={pomodoroState.isRunning}
         >
           <div className="space-y-1">
             <span className="text-[10px] font-mono text-[#94A3B8] uppercase tracking-widest block">
