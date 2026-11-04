@@ -198,7 +198,7 @@ The pomodoro engine (`src/utils/pomodoro.ts`) is pure and timestamp-based. **Kee
 - **Every** statistic (Dashboard metrics and the History analytics cards) comes from `computeHistoryStats` in `src/utils/stats.ts`. Don't add a second calculation anywhere.
 - Filters (all, wins, losses, draws) use `getOutcome`. Search matches opponent alias or date.
 - New users must see the empty state. **Never fabricate history.**
-- Analytics intentionally lives inside Match History. There is no separate Analytics page, and none should be created.
+- Personal Analytics is a separate device-local view. It may use current backend history aggregates for monthly reports after integration, but daily/weekly focus charts require a historical personal-session endpoint. The current API contract has no leaderboard or goal-persistence endpoint; don't derive a global leaderboard from browser data.
 
 ## 13. Logout and session expiry
 

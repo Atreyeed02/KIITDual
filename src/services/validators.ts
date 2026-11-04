@@ -12,6 +12,8 @@ import {
   FocusSession,
   MatchResult,
   MatchHistory,
+  PersonalGoals,
+  AnalyticsDemoState,
 } from '../types';
 import type { ActivityEvent } from './activityService';
 
@@ -58,8 +60,25 @@ export const isFocusSession = (v: unknown): v is FocusSession =>
   isRec(v) &&
   isStr(v.id) &&
   isStr(v.matchId) &&
+  isStr(v.userId) &&
+  isDateStr(v.startedAt) &&
   isNum(v.durationMinutes) &&
-  isBool(v.completed);
+  isBool(v.completed) &&
+  (v.source === undefined || v.source === 'demo');
+
+export const isPersonalGoals = (v: unknown): v is PersonalGoals =>
+  isRec(v) &&
+  (v.weeklyFocusTargetMinutes === null ||
+    (isNum(v.weeklyFocusTargetMinutes) &&
+      Number.isInteger(v.weeklyFocusTargetMinutes) &&
+      v.weeklyFocusTargetMinutes > 0)) &&
+  (v.weeklySessionTarget === null ||
+    (isNum(v.weeklySessionTarget) &&
+      Number.isInteger(v.weeklySessionTarget) &&
+      v.weeklySessionTarget > 0));
+
+export const isAnalyticsDemoState = (v: unknown): v is AnalyticsDemoState =>
+  isRec(v) && isPersonalGoals(v.previousGoals);
 
 export const isMatchResult = (v: unknown): v is MatchResult =>
   isRec(v) &&
@@ -76,7 +95,8 @@ export const isMatchHistory = (v: unknown): v is MatchHistory =>
   isMatchResult(v.opponentResult) &&
   isBool(v.isWinner) &&
   isBool(v.isDraw) &&
-  isDateStr(v.completedAt);
+  isDateStr(v.completedAt) &&
+  (v.source === undefined || v.source === 'demo');
 
 export const isActivityEvent = (v: unknown): v is ActivityEvent =>
   isRec(v) && isStr(v.id) && isStr(v.opponentUsername) && isStr(v.message) && isDateStr(v.timestamp);

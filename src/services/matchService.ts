@@ -59,17 +59,17 @@ export const matchService = {
     const absSeed = Math.abs(seed);
 
     // Realistic range:
-    // Focus Minutes: 50m to 150m (in 25m increments)
+    // Focus Minutes: 50m to 175m (in 25m increments)
     const possibleFocus = [50, 75, 100, 125, 150, 175];
     const focusMinutes = possibleFocus[absSeed % possibleFocus.length];
-
-    // Tasks: 2 to 4
-    const tasksCompleted = 2 + (absSeed % 3);
 
     // Sessions: corresponding roughly to focus / 25
     const sessionsCompleted = Math.max(1, Math.floor(focusMinutes / 25));
 
-    const finalScore = calculateScore(focusMinutes, tasksCompleted, sessionsCompleted);
+    // Tasks are tracked for display only — zero weight in v2 formula
+    const tasksCompleted = 2 + (absSeed % 3);
+
+    const finalScore = calculateScore(focusMinutes, sessionsCompleted);
 
     const opponentResult: MatchResult = {
       id: `res_opp_${match.id}`,
@@ -105,7 +105,8 @@ export const matchService = {
     const totalFocusMinutes = completedSessions.reduce((acc, curr) => acc + curr.durationMinutes, 0);
     const tasksCompleted = matchTasks.filter((t) => t.matchId === matchId && t.isCompleted).length;
     const sessionsCompleted = completedSessions.length;
-    const finalScore = calculateScore(totalFocusMinutes, tasksCompleted, sessionsCompleted);
+    // v2 formula: tasks carry zero weight
+    const finalScore = calculateScore(totalFocusMinutes, sessionsCompleted);
 
     return {
       id: `res_user_${matchId}`,

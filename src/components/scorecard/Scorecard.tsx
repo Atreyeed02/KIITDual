@@ -13,7 +13,6 @@ import {
   XCircle,
   MinusCircle,
   Clock,
-  ListChecks,
   Activity,
   Sparkles,
   LayoutDashboard,
@@ -112,21 +111,17 @@ export const Scorecard: React.FC = () => {
   const me = match.user1Profile;
   const myHandle = me.anonUsername || 'You';
 
-  // Subtotals from the single score engine
+  // Subtotals from the single score engine (v2: focus + sessions only)
   const userBreakdown = getScoreBreakdown(
     userResult.totalFocusMinutes,
-    userResult.tasksCompleted,
     userResult.sessionsCompleted
   );
   const oppBreakdown = getScoreBreakdown(
     opponentResult.totalFocusMinutes,
-    opponentResult.tasksCompleted,
     opponentResult.sessionsCompleted
   );
   const userFocusPoints = userBreakdown.focusPoints;
   const oppFocusPoints = oppBreakdown.focusPoints;
-  const userTaskPoints = userBreakdown.taskPoints;
-  const oppTaskPoints = oppBreakdown.taskPoints;
   const userSessionPoints = userBreakdown.sessionPoints;
   const oppSessionPoints = oppBreakdown.sessionPoints;
 
@@ -294,7 +289,7 @@ export const Scorecard: React.FC = () => {
                 <Activity className="w-4 h-4 text-[#6C7CFF]" />
                 Detailed Performance Breakdown
               </h3>
-              <span className="text-[11px] font-mono text-[#475569]">SRS FORMULA v1.0</span>
+              <span className="text-[11px] font-mono text-[#475569]">SCORE FORMULA v2.0</span>
             </div>
 
             <div className="divide-y divide-[#2A3348] border border-[#2A3348] rounded-xl overflow-hidden bg-[#1A2133]">
@@ -321,36 +316,13 @@ export const Scorecard: React.FC = () => {
                 </div>
               </div>
 
-              {/* Row 2: Tasks Completed */}
-              <div className="grid grid-cols-3 p-3.5 text-xs font-mono items-center hover:bg-[#222B42]/50 transition-colors">
-                <div className="flex items-center gap-2">
-                  <ListChecks className="w-4 h-4 text-[#6C7CFF]" />
-                  <div>
-                    <span className="text-[#F1F5F9] block font-medium">Tasks Completed</span>
-                    <span className="text-[10px] text-[#94A3B8]">30 pts / task</span>
-                  </div>
-                </div>
-                <div className="text-center">
-                  <span className="text-sm font-bold text-[#6C7CFF]">
-                    {userResult.tasksCompleted}
-                  </span>
-                  <span className="text-[10px] text-[#94A3B8] block">+{userTaskPoints} pts</span>
-                </div>
-                <div className="text-center">
-                  <span className="text-sm font-bold text-[#94A3B8]">
-                    {opponentResult.tasksCompleted}
-                  </span>
-                  <span className="text-[10px] text-[#8A96AB] block">+{oppTaskPoints} pts</span>
-                </div>
-              </div>
-
-              {/* Row 3: Completed Pomodoro Sessions */}
+              {/* Row 2: Focus Sessions */}
               <div className="grid grid-cols-3 p-3.5 text-xs font-mono items-center hover:bg-[#222B42]/50 transition-colors">
                 <div className="flex items-center gap-2">
                   <Activity className="w-4 h-4 text-[#FFB547]" />
                   <div>
                     <span className="text-[#F1F5F9] block font-medium">Focus Sessions</span>
-                    <span className="text-[10px] text-[#94A3B8]">10 pts / session</span>
+                    <span className="text-[10px] text-[#94A3B8]">15 pts / session</span>
                   </div>
                 </div>
                 <div className="text-center">

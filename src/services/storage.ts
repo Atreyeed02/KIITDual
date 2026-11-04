@@ -25,7 +25,10 @@ export type UserScopedKey =
   | 'active_scorecard'
   | 'active_view'
   | 'notification_prefs'
-  | 'matchmaking_session';
+  | 'matchmaking_session'
+  | 'focus_session_history'
+  | 'personal_goals'
+  | 'analytics_demo_state';
 
 const USER_SCOPED_KEYS: UserScopedKey[] = [
   'match_history',
@@ -39,11 +42,33 @@ const USER_SCOPED_KEYS: UserScopedKey[] = [
   'active_view',
   'notification_prefs',
   'matchmaking_session',
+  'focus_session_history',
+  'personal_goals',
+  'analytics_demo_state',
 ];
 
 const scopedKey = (userId: string, key: UserScopedKey) => `u_${userId}_${key}`;
 
 export const storage = {
+  /** Checks whether this browser can round-trip a temporary local record. */
+  isAvailable(): boolean {
+    const key = `${STORAGE_PREFIX}analytics_probe_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    let canRoundTrip = false;
+    try {
+      localStorage.setItem(key, 'available');
+      canRoundTrip = localStorage.getItem(key) === 'available';
+    } catch (error) {
+      console.error('[storage] Browser storage is unavailable:', error);
+    }
+    try {
+      localStorage.removeItem(key);
+    } catch (error) {
+      console.error('[storage] Could not remove the temporary storage probe:', error);
+      return false;
+    }
+    return canRoundTrip;
+  },
+
   get<T>(key: string, defaultValue: T, guard?: Guard<T>): T {
     try {
       const item = localStorage.getItem(`${STORAGE_PREFIX}${key}`);
@@ -80,11 +105,13 @@ export const storage = {
     }
   },
 
-  set<T>(key: string, value: T): void {
+  set<T>(key: string, value: T): boolean {
     try {
       localStorage.setItem(`${STORAGE_PREFIX}${key}`, JSON.stringify(value));
+      return true;
     } catch (error) {
       console.error(`[storage] Error setting key "${key}":`, error);
+      return false;
     }
   },
 
@@ -118,8 +145,8 @@ export const storage = {
     getList<T>(userId: string, key: UserScopedKey, itemGuard: Guard<T>): T[] {
       return storage.getList(scopedKey(userId, key), itemGuard);
     },
-    set<T>(userId: string, key: UserScopedKey, value: T): void {
-      storage.set(scopedKey(userId, key), value);
+    set<T>(userId: string, key: UserScopedKey, value: T): boolean {
+      return storage.set(scopedKey(userId, key), value);
     },
   },
 

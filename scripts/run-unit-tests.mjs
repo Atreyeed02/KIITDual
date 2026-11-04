@@ -29,7 +29,12 @@ try {
       platform: 'node',
       format: 'cjs',
       logLevel: 'error',
-      define: { 'import.meta.env.DEV': String(isDev) },
+      define: {
+        'import.meta.env.DEV': String(isDev),
+        // lib/supabase.ts throws without these; tests never hit the network.
+        'import.meta.env.VITE_SUPABASE_URL': '"http://localhost:54321"',
+        'import.meta.env.VITE_SUPABASE_ANON_KEY': '"test-anon-key"',
+      },
     });
     console.log(`\n=== ${file} (${isDev ? 'DEV' : 'PRODUCTION'} build) ===`);
     // Suites log expected storage warnings on stderr; show only the results.
