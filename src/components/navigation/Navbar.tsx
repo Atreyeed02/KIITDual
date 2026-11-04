@@ -10,6 +10,7 @@ import {
   LogOut,
   LayoutDashboard,
   History,
+  BarChart3,
   Settings as SettingsIcon,
 } from 'lucide-react';
 
@@ -34,6 +35,12 @@ export const Navbar: React.FC = () => {
       label: 'Match History',
       shortLabel: 'History',
       icon: <History className="w-4 h-4" aria-hidden="true" />,
+    },
+    {
+      id: 'analytics',
+      label: 'Personal Analytics',
+      shortLabel: 'Analytics',
+      icon: <BarChart3 className="w-4 h-4" aria-hidden="true" />,
     },
     {
       id: 'settings',

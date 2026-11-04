@@ -60,6 +60,17 @@ export interface FocusSession {
   startedAt: string;
   durationMinutes: number; // e.g. 25 or 50
   completed: boolean;     // True if finished without cancelling early
+  source?: 'demo';
+}
+
+export interface AnalyticsDemoState {
+  previousGoals: PersonalGoals;
+}
+
+// Personal targets are stored per account in this browser. Null means no target.
+export interface PersonalGoals {
+  weeklyFocusTargetMinutes: number | null;
+  weeklySessionTarget: number | null;
 }
 
 // End-of-match calculated scorecard for a participant
@@ -81,6 +92,7 @@ export interface MatchHistory {
   isWinner: boolean;
   isDraw: boolean;
   completedAt: string;
+  source?: 'demo';
 }
 
 // Matchmaking Queue Status

@@ -39,6 +39,28 @@ async function session(browser, base) {
 
   // ---------- DEV server ----------
   const dev = await session(browser, DEV_URL);
+  const userId = await dev.page.evaluate(() => JSON.parse(localStorage.getItem('focusmatch_user')).id);
+  const userList = async (key) => dev.page.evaluate(
+    ([id, name]) => JSON.parse(localStorage.getItem(`focusmatch_u_${id}_${name}`) ?? 'null'),
+    [userId, key]
+  );
+  await dev.btn('Personal Analytics').click();
+  await dev.page.getByLabel('Weekly focus-time target in minutes').fill('90');
+  await dev.page.getByLabel('Weekly completed-session target').fill('2');
+  await dev.btn('Save weekly targets').click();
+  await dev.btn('Load Demo Data').click();
+  let demoHistory = await userList('match_history');
+  let demoSessions = await userList('focus_session_history');
+  check('dev: load action shows clearly labelled synthetic activity', await dev.page.getByText('Synthetic DEMO data is included').isVisible() && await dev.page.getByText('SYNTHETIC DEMO').first().isVisible());
+  check('dev: demo dataset covers both months and all match outcomes', demoHistory.length === 8 && demoHistory.some((item) => item.isWinner) && demoHistory.some((item) => item.isDraw) && demoHistory.some((item) => !item.isWinner && !item.isDraw));
+  check('dev: demo sessions and weekly targets are persisted for this user', demoSessions.length >= 14 && (await userList('personal_goals')).weeklyFocusTargetMinutes === 180);
+  await dev.btn('Load Demo Data').click();
+  demoHistory = await userList('match_history');
+  demoSessions = await userList('focus_session_history');
+  check('dev: repeated load does not duplicate synthetic records', demoHistory.length === 8 && demoSessions.length === 14);
+  await dev.btn('Reset Demo Data').click();
+  check('dev: reset removes only synthetic data and restores prior goals', (await userList('match_history')).length === 0 && (await userList('focus_session_history')).length === 0 && (await userList('personal_goals')).weeklyFocusTargetMinutes === 90);
+  await dev.btn('KIITDual — go to Dashboard').click();
   await dev.startMatch();
   const select = dev.page.getByLabel('Demo outcome at match end:');
   check('dev: DEV ONLY control visible in workspace', await select.isVisible());
@@ -69,6 +91,9 @@ async function session(browser, base) {
 
   // ---------- PRODUCTION preview ----------
   const prod = await session(browser, PROD_URL);
+  await prod.btn('Personal Analytics').click();
+  check('prod: analytics demo load/reset controls are absent', (await prod.page.getByRole('button', { name: 'Load Demo Data' }).count()) === 0 && (await prod.page.getByRole('button', { name: 'Reset Demo Data' }).count()) === 0);
+  await prod.btn('KIITDual — go to Dashboard').click();
   await prod.startMatch();
   check('prod: DEV ONLY control absent', (await prod.page.locator('text=DEV ONLY').count()) === 0);
   // Even with a stale dev setting in storage, production uses the natural opponent.

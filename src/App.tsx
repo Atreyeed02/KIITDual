@@ -8,6 +8,7 @@ import { MatchmakingModal } from './components/dashboard/MatchmakingModal';
 import { MatchWorkspace } from './components/workspace/MatchWorkspace';
 import { Scorecard } from './components/scorecard/Scorecard';
 import { MatchHistoryPage } from './components/history/MatchHistoryPage';
+import { AnalyticsPage } from './components/analytics/AnalyticsPage';
 import { SettingsPage } from './components/settings/SettingsPage';
 
 const AuthenticatedView: React.FC = () => {
@@ -19,6 +20,8 @@ const AuthenticatedView: React.FC = () => {
       return <Scorecard />;
     case 'history':
       return <MatchHistoryPage />;
+    case 'analytics':
+      return <AnalyticsPage />;
     case 'settings':
       return <SettingsPage />;
     default:
