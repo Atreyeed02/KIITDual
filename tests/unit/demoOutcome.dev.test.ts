@@ -22,23 +22,23 @@ const finalize = (sessions: number, tasks: number) => {
   return { match, out: matchService.finalizeMatch({ match, userProfile: me, focusSessions: s, matchTasks: t }) };
 };
 const verdict = (o: { isWinner: boolean; isDraw: boolean }) => (o.isDraw ? 'DRAW' : o.isWinner ? 'WIN' : 'LOSS');
-const formulaHolds = (r: any) => r.finalScore === calculateScore(r.totalFocusMinutes, r.tasksCompleted, r.sessionsCompleted);
+const formulaHolds = (r: any) => r.finalScore === calculateScore(r.totalFocusMinutes, r.sessionsCompleted);
 
 eq('dev build flag', isDevBuild, true);
 eq('default mode is natural', demoOutcome.get(), 'natural');
 
 for (const [mode, expected] of [['win', 'WIN'], ['loss', 'LOSS'], ['draw', 'DRAW']] as const) {
   demoOutcome.set(mode);
-  for (const [s, t] of [[1, 1], [3, 0], [0, 2], [2, 5]]) {
+  for (const [s, t] of [[1, 1], [3, 0], [2, 5]]) {
     const { match, out } = finalize(s, t);
     eq(`force ${mode} (sessions=${s}, tasks=${t}) -> ${expected}`, verdict(out), expected);
     eq(`  opponent score uses the formula`, formulaHolds(out.opponentResult), true);
-    eq(`  user score uses the formula`, out.userResult.finalScore, calculateScore(25 * s, t, s));
+    eq(`  user score uses the formula`, out.userResult.finalScore, calculateScore(25 * s, s));
     eq(`  result cached for refresh stability`, JSON.parse(mem.get(`focusmatch_opp_result_${match.id}`)!), out.opponentResult);
   }
 }
 demoOutcome.set('win');
-eq('force WIN at 0 points falls back to natural (no negative opponent)', finalize(0, 0).out.opponentResult.finalScore >= 105, true);
+eq('force WIN at 0 points falls back to natural (no negative opponent)', finalize(0, 0).out.opponentResult.finalScore >= 80, true);
 
 demoOutcome.set('natural');
 const nat = finalize(1, 1);
