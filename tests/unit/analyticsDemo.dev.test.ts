@@ -40,7 +40,7 @@ const realSessions = [{
   completed: true,
 }] as FocusSession[];
 
-eq('demo action is available only in the dev test bundle', isAnalyticsDemoAvailable(), true);
+eq('demo action is available in the dev test bundle', isAnalyticsDemoAvailable(), true);
 
 eq('demo data has 3 previous-month and 5 current-month matches', [
   getMonthlyReport(dataset.matchHistory, '2026-10').current.completedMatches,

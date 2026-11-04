@@ -249,6 +249,8 @@ export function removeAnalyticsDemoDataset(
   };
 }
 
+// Demo data is synthetic, labelled in the UI, local to the browser and resettable, so it is
+// offered in production too. Set VITE_ENABLE_ANALYTICS_DEMO=false to hide it.
 export function isAnalyticsDemoAvailable(): boolean {
-  return isDevBuild;
+  return isDevBuild || import.meta.env.VITE_ENABLE_ANALYTICS_DEMO !== 'false';
 }
